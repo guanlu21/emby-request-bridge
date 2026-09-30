@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -12,7 +13,14 @@ _conn = None
 def conn():
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(cfg.DB_PATH, check_same_thread=False)
+        d = os.path.dirname(cfg.DB_PATH)
+        try:
+            if d:
+                os.makedirs(d, exist_ok=True)
+            _conn = sqlite3.connect(cfg.DB_PATH, check_same_thread=False)
+        except (OSError, sqlite3.OperationalError) as e:
+            raise RuntimeError(f"无法打开数据库 {cfg.DB_PATH}：{e}。请给 {d or '.'} 挂载一个可写目录，"
+                               f"或设置环境变量 DB_PATH=/tmp/bridge.db（重启会丢数据）") from e
         _conn.row_factory = sqlite3.Row
         _conn.execute("""CREATE TABLE IF NOT EXISTS requests(
             id INTEGER PRIMARY KEY AUTOINCREMENT, media_type TEXT, tmdb_id INTEGER, season INTEGER,

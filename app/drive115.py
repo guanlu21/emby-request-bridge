@@ -29,6 +29,20 @@ def _ids(ids):
     return {f"fid[{i}]": x for i, x in enumerate(ids)}
 
 
+class LazyDrive:
+    """首次使用时才创建 115 客户端；没配 Cookie 时应用照常启动，用到时才报错。"""
+
+    def __init__(self, cookie: str):
+        self._cookie, self._d = cookie, None
+
+    def __getattr__(self, name):
+        if not self._cookie:
+            raise RuntimeError("未配置 P115_COOKIE")
+        if self._d is None:
+            self._d = P115Drive(self._cookie)
+        return getattr(self._d, name)
+
+
 class P115Drive:
     def __init__(self, cookie: str):
         from p115client import P115Client

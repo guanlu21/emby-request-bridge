@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from . import db
 from .config import cfg
-from .drive115 import P115Drive
+from .drive115 import LazyDrive
 from .pipeline import Pipeline, notify_after
 from .sources import tmdb_meta, search_all
 
@@ -35,7 +35,7 @@ def spawn(rid):
 @asynccontextmanager
 async def lifespan(app):
     global pipe
-    pipe = Pipeline(P115Drive(cfg.P115_COOKIE), _meta, search_all, notify_after)
+    pipe = Pipeline(LazyDrive(cfg.P115_COOKIE), _meta, search_all, notify_after)
     for rid in db.unfinished():  # 重启后继续未完成的请求
         spawn(rid)
     yield
