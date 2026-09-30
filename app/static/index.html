@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>求片桥接</title>
+<style>
+:root{--bg:#fff;--fg:#1b1b1f;--mut:#777;--line:#e3e3e8;--ok:#1a7f37;--bad:#c62828;--run:#0b63ce}
+@media(prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e8e8ec;--mut:#9a9aa3;--line:#2c2c33;--ok:#4cc26b;--bad:#ef6a6a;--run:#5aa2ff}}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+.s-done{color:var(--ok)}.s-failed{color:var(--bad)}.s-searching,.s-downloading,.s-queued{color:var(--run)}
+small{color:var(--mut)}button{cursor:pointer}details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut)}
+</style></head><body>
+<h3>求片请求</h3>
+<table><thead><tr><th>#</th><th>片名</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<script>
+let tk=localStorage.getItem('tk')||prompt('BRIDGE_TOKEN');localStorage.setItem('tk',tk||'');
+const H={'X-Token':tk};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function load(){
+  const r=await fetch('/api/requests',{headers:H});
+  if(r.status==401){localStorage.removeItem('tk');return}
+  const d=await r.json();
+  document.getElementById('rows').innerHTML=d.map(x=>`<tr><td>${x.id}</td>
+  <td>${esc(x.title)}${x.season?` <small>S${x.season}</small>`:''}
+    <details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
+  <td class="s-${x.status}">${x.status}<br><small>${esc(x.error)}</small></td>
+  <td><small>${esc(x.picked)}</small></td>
+  <td>${x.status=='failed'?`<button onclick="retry(${x.id},0)">继续换下一个</button> <button onclick="retry(${x.id},1)">重来</button>`:''}</td></tr>`).join('');
+}
+async function retry(id,reset){await fetch(`/api/requests/${id}/retry?reset=${reset}`,{method:'POST',headers:H});load()}
+load();setInterval(load,5000);
+</script></body></html>
