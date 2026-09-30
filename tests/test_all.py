@@ -18,7 +18,8 @@ except ImportError:  # 离线沙箱里没有 httpx，测试只用到纯逻辑，
     sys.modules["httpx"] = _m
 
 from app import db  # noqa: E402
-from app.filters import GB, Rules, file_ok, parse_resolution, parse_season, select_files, title_match  # noqa: E402
+from app.filters import (GB, Rules, file_ok, has_watermark, parse_resolution, parse_season,  # noqa: E402
+                         pick_best_file, score, select_files, title_match)
 from app.pipeline import Pipeline  # noqa: E402
 from app.sources import Candidate, build_candidates  # noqa: E402
 
@@ -107,6 +108,57 @@ class FakeDrive:
         self.deleted += ids
 
 
+class NewRules(unittest.TestCase):
+    def test_watermark(self):
+        self.assertTrue(has_watermark("Dune.2024.1080p.带水印"))
+        self.assertTrue(has_watermark("Dune 2024 1080p watermark"))
+        self.assertFalse(has_watermark("Dune 2024 1080p 无水印"))
+        self.assertFalse(has_watermark("Dune 2024 1080p No Watermark"))
+        self.assertFalse(has_watermark("Dune 2024 1080p"))
+        self.assertFalse(file_ok("a.1080p.水印版.mkv", 2 * GB, R))
+        out = build_candidates([Candidate("magnet", "Dune.Part.Two.2024.1080p.水印", "magnet:?xt=urn:btih:w", size=2 * GB)],
+                               {"names": ["Dune: Part Two"], "year": "2024", "episodes": 0}, "movie", None, R)
+        self.assertEqual(out, [])
+
+    def test_prefer_1080_and_size_window(self):
+        r = Rules(720, 0.5 * GB, 5 * GB, 1 * GB, 3 * GB)
+        s1080_in = score("Dune 2024 1080p WEB-DL", per_file=2 * GB, rules=r)
+        s1080_big = score("Dune 2024 1080p WEB-DL", per_file=4.5 * GB, rules=r)
+        s2160_in = score("Dune 2024 2160p WEB-DL", per_file=2.5 * GB, rules=r)
+        s720_in = score("Dune 2024 720p WEB-DL", per_file=2 * GB, rules=r)
+        self.assertGreater(s1080_in, s1080_big)   # 1-3GB 区间内更优先
+        self.assertGreater(s1080_in, s2160_in)    # 1080p 优先于 2160p
+        self.assertGreater(s1080_in, s720_in)
+
+    def test_pick_best_file(self):
+        r = Rules(720, 0.5 * GB, 5 * GB, 1 * GB, 3 * GB)
+        files = [{"id": 1, "name": "a.2160p.mkv", "size": 4.8 * GB},
+                 {"id": 2, "name": "a.1080p.mkv", "size": 2.2 * GB},
+                 {"id": 3, "name": "a.720p.mkv", "size": 1.2 * GB}]
+        self.assertEqual(pick_best_file(files, r)["id"], 2)
+
+
+class SettingsAuthTest(unittest.TestCase):
+    def test_settings_roundtrip_and_proxy(self):
+        from app import settings
+        settings.save({"proxy_enabled": True, "proxy_url": "192.168.1.5:7891", "proxy_user": "u", "proxy_pass": "p@ss",
+                       "tmdb_key": "K1", "language": "zh-CN"})
+        self.assertEqual(settings.proxy(), "http://u:p%40ss@192.168.1.5:7891")
+        settings.save({"tmdb_key": "", "proxy_pass": ""})           # 留空 = 不修改
+        self.assertEqual(settings.get()["tmdb_key"], "K1")
+        pub = settings.public()
+        self.assertNotIn("tmdb_key", pub); self.assertTrue(pub["has_tmdb_key"]); self.assertNotIn("proxy_pass", pub)
+        settings.save({"proxy_enabled": False})
+        self.assertIsNone(settings.proxy())
+
+    def test_session_token(self):
+        from app import auth
+        tok = auth.make({"uid": "1", "name": "bob", "admin": False})
+        self.assertEqual(auth.verify(tok)["name"], "bob")
+        self.assertIsNone(auth.verify(tok[:-2] + "xx"))              # 篡改签名
+        self.assertIsNone(auth.verify(auth.make({"name": "x"}, ttl=-1)))  # 过期
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
@@ -155,7 +207,7 @@ class UserLinkTest(unittest.TestCase):
 class PipelineTest(unittest.TestCase):
     def test_fallback_and_cleanup(self):
         meta = {"names": ["Dune: Part Two"], "year": "2024", "episodes": 0}
-        raw = [Candidate("share", "Dune Part Two 2024 1080p", "https://115.com/s/abc?password=x"),
+        raw = [Candidate("share", "Dune Part Two 2024 1080p 中字 无水印", "https://115.com/s/abc?password=x"),
                Candidate("magnet", "Dune.Part.Two.2024.1080p.WEB-DL", "magnet:?xt=urn:btih:b", size=3 * GB, seeders=5),
                Candidate("magnet", "Dune.Part.Two.2024.1080p.BluRay", "magnet:?xt=urn:btih:a", size=3 * GB, seeders=50)]
         done = []

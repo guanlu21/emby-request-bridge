@@ -8,7 +8,7 @@ import httpx
 
 from .config import cfg
 from .filters import (Rules, parse_resolution, BAD_TAGS, title_match, score,
-                      magnet_size_ok)
+                      magnet_size_ok, has_watermark)
 
 
 @dataclass
@@ -24,24 +24,20 @@ class Candidate:
 
 
 async def tmdb_meta(media_type: str, tmdb_id: int, season):
-    """返回 {names, year, episodes}。没配 TMDB key 时由调用方传入的标题兜底。"""
-    if not cfg.TMDB_KEY:
+    """返回 {names, year, episodes}。没配 TMDB key 时返回 None，由调用方用标题兜底。"""
+    from . import settings, tmdb
+    if not settings.get()["tmdb_key"]:
         return None
-    base = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}"
-    async with httpx.AsyncClient(timeout=15) as c:
-        zh, en = await asyncio.gather(
-            c.get(base, params={"api_key": cfg.TMDB_KEY, "language": "zh-CN"}),
-            c.get(base, params={"api_key": cfg.TMDB_KEY, "language": "en-US"}))
-        zh, en = zh.json(), en.json()
-        key = "title" if media_type == "movie" else "name"
-        okey = "original_title" if media_type == "movie" else "original_name"
-        dkey = "release_date" if media_type == "movie" else "first_air_date"
-        names = [n for n in dict.fromkeys([zh.get(key), en.get(key), zh.get(okey)]) if n]
-        episodes = 0
-        if media_type == "tv" and season:
-            s = (await c.get(f"{base}/season/{season}", params={"api_key": cfg.TMDB_KEY})).json()
-            episodes = len(s.get("episodes", []))
-    return {"names": names, "year": (zh.get(dkey) or "")[:4], "episodes": episodes}
+    path = f"/{media_type}/{tmdb_id}"
+    loc, en = await asyncio.gather(tmdb.get(path), tmdb.get(path, language="en-US"))
+    key = "title" if media_type == "movie" else "name"
+    okey = "original_title" if media_type == "movie" else "original_name"
+    dkey = "release_date" if media_type == "movie" else "first_air_date"
+    names = [n for n in dict.fromkeys([loc.get(key), en.get(key), loc.get(okey)]) if n]
+    episodes = 0
+    if media_type == "tv" and season:
+        episodes = len((await tmdb.get(f"{path}/season/{season}")).get("episodes", []))
+    return {"names": names, "year": (loc.get(dkey) or "")[:4], "episodes": episodes}
 
 
 def parse_115_share(url: str, password: str = ""):
@@ -102,7 +98,7 @@ async def search_all(meta: dict, media_type: str, season):
 def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, rules: Rules):
     seen, out = set(), []
     for c in raw:
-        if c.url in seen or not c.title or BAD_TAGS.search(c.title):
+        if c.url in seen or not c.title or BAD_TAGS.search(c.title) or has_watermark(c.title):
             continue
         seen.add(c.url)
         if not title_match(c.title, meta["names"], meta["year"], media_type, season):
@@ -113,6 +109,9 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
         if c.kind == "magnet":
             if c.size and not magnet_size_ok(c.size, media_type, meta.get("episodes", 0), rules):
                 continue
-        c.score = score(c.title, c.seeders, c.kind == "share")
+        per = 0
+        if c.kind == "magnet" and c.size:
+            per = c.size if media_type == "movie" else c.size / max(meta.get("episodes", 0), 1)
+        c.score = score(c.title, c.seeders, c.kind == "share", per, rules)
         out.append(c)
     return sorted(out, key=lambda x: x.score, reverse=True)

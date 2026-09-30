@@ -33,3 +33,19 @@ async def check(name: str):
     if u["disabled"]:
         return False, "该 Emby 账号已停用或已到期", u["id"]
     return True, "", u["id"]
+
+
+async def has_item(media_type: str, tmdb_id: int) -> bool:
+    """库里是否已有这部片（靠 TMDB ID 比对；查询失败按"没有"处理）。"""
+    if not (cfg.EMBY_URL and cfg.EMBY_KEY):
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                "api_key": cfg.EMBY_KEY, "Recursive": "true", "Limit": 5, "Fields": "ProviderIds",
+                "IncludeItemTypes": "Movie" if media_type == "movie" else "Series",
+                "AnyProviderIdEquals": f"tmdb.{tmdb_id}"})
+        return any(str((i.get("ProviderIds") or {}).get("Tmdb", "")) == str(tmdb_id)
+                   for i in r.json().get("Items", []))
+    except Exception:  # noqa
+        return False

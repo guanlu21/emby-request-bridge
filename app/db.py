@@ -136,3 +136,11 @@ def batch(ids, action):
             done.append(i)
         c.commit()
     return done
+
+
+def status_of(media_type, tmdb_id):
+    """这部片最近一条请求的状态；没人求过返回空串。"""
+    with _lock:
+        r = conn().execute("SELECT status FROM requests WHERE media_type=? AND tmdb_id=? ORDER BY id DESC LIMIT 1",
+                           (media_type, tmdb_id)).fetchone()
+        return r["status"] if r else ""

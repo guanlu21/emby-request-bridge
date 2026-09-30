@@ -35,6 +35,8 @@ class cfg:
     MIN_RES = _i("MIN_RESOLUTION", 720)
     MIN_GB = _f("MIN_FILE_GB", 0.5)
     MAX_GB = _f("MAX_FILE_GB", 5.0)
+    PREFER_MIN_GB = _f("PREFER_MIN_GB", 1.0)   # 偏好的体积区间：在区间内加分
+    PREFER_MAX_GB = _f("PREFER_MAX_GB", 3.0)
 
     MAX_ATTEMPTS = _i("MAX_ATTEMPTS", 8)
     OFFLINE_TIMEOUT = _i("OFFLINE_TIMEOUT_SECONDS", 1800)

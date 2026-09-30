@@ -7,12 +7,13 @@ import httpx
 
 from . import db
 from .config import cfg
-from .filters import Rules, select_files
+from .filters import Rules, pick_best_file, select_files
 from .sources import build_candidates, parse_115_share
 
 
 def rules() -> Rules:
-    return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3)
+    return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3,
+                 cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3)
 
 
 class Pipeline:
@@ -72,6 +73,10 @@ class Pipeline:
             keep, drop = select_files(await self.drive.list_files(stage), rules())
             if not keep:
                 raise RuntimeError("没有符合条件的视频文件（非视频/太小/太大/分辨率不足）")
+            if r["media_type"] == "movie" and len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
+                best = pick_best_file(keep, rules())
+                drop += [f for f in keep if f is not best]
+                keep = [best]
             db.log(rid, f"保留 {len(keep)} 个视频，丢弃 {len(drop)} 个文件")
             await self.drive.move([f["id"] for f in keep], await self.dest_dir(r, meta))
             return True

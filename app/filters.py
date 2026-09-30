@@ -8,11 +8,21 @@ BAD_TAGS = re.compile(r"(?i)(?<![a-z])(cam|hdcam|hdts|telesync|telecine|screener
 CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
+WM_BAD = re.compile(r"(?<![无去免])水印|watermark|[带有]logo", re.I)
+WM_OK = re.compile(r"[无去免]水印|no[ ._-]?watermark|watermark[ ._-]?free", re.I)
+
+
+def has_watermark(text: str) -> bool:
+    return bool(WM_BAD.search(text)) and not WM_OK.search(text)
+
+
 @dataclass
 class Rules:
     min_res: int = 720
     min_size: float = 0.5 * GB
     max_size: float = 5 * GB
+    pref_min: float = 1 * GB   # 偏好区间，只影响排序
+    pref_max: float = 3 * GB
 
 
 def parse_resolution(title: str) -> int:
@@ -29,7 +39,7 @@ def is_video(name: str) -> bool:
 
 
 def file_ok(name: str, size: float, rules: Rules) -> bool:
-    if not is_video(name):
+    if not is_video(name) or has_watermark(name):
         return False
     if not (rules.min_size <= size <= rules.max_size):
         return False
@@ -43,6 +53,14 @@ def select_files(files: list[dict], rules: Rules):
     for f in files:
         (keep if file_ok(f["name"], f["size"], rules) else drop).append(f)
     return keep, drop
+
+
+def pick_best_file(files: list[dict], rules: Rules) -> dict:
+    """电影分享里常带多个版本，只留一个：优先 1080p，其次落在偏好体积区间，再取较大的。"""
+    def key(f):
+        return (parse_resolution(f["name"]) == 1080, rules.pref_min <= f["size"] <= rules.pref_max,
+                bool(WM_OK.search(f["name"])), f["size"])
+    return max(files, key=key)
 
 
 def norm(s: str) -> str:
@@ -74,9 +92,13 @@ def title_match(result_title: str, names: list[str], year, media_type: str, seas
     return (not multi) and s == season and pack
 
 
-def score(title: str, seeders: int = 0, is_share: bool = False) -> int:
+def score(title: str, seeders: int = 0, is_share: bool = False, per_file: float = 0, rules: Rules = None) -> int:
     t = title.lower()
-    sc = {1080: 50, 2160: 48, 720: 20}.get(parse_resolution(title), 0)
+    sc = {1080: 50, 2160: 35, 720: 15}.get(parse_resolution(title), 0)
+    if rules and per_file and rules.pref_min <= per_file <= rules.pref_max:
+        sc += 25
+    if WM_OK.search(title):
+        sc += 10
     if re.search(r"blu-?ray|bdrip", t):
         sc += 15
     elif re.search(r"web-?dl|webrip", t):

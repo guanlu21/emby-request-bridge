@@ -1,13 +1,4 @@
 services:
-  seerr:                       # 求片前端（Seerr，支持 Emby）
-    image: ghcr.io/seerr-team/seerr:latest
-    init: true
-    container_name: seerr
-    environment: [TZ=Asia/Shanghai, PORT=5055]
-    ports: ["5055:5055"]
-    volumes: ["./data/seerr:/app/config"]   # 目录属主需为 1000:1000
-    restart: unless-stopped
-
   prowlarr:                    # 磁力/种子站聚合，在网页里添加站点
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
@@ -28,5 +19,5 @@ services:
     env_file: .env
     ports: ["8686:8686"]
     volumes: ["./data/bridge:/data"]
-    depends_on: [seerr, prowlarr, pansou]
+    depends_on: [prowlarr, pansou]
     restart: unless-stopped
