@@ -107,6 +107,51 @@ class FakeDrive:
         self.deleted += ids
 
 
+class ApprovalTest(unittest.TestCase):
+    def test_pending_promote_batch(self):
+        a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
+        self.assertEqual(db.get(a)["requester"], "小明")
+        self.assertIsNone(db.create("movie", 900, None, "A (2020)", "小红", "pending"))  # 重复请求不重复建
+        self.assertEqual(db.promote("movie", 900, None), a)
+        self.assertEqual(db.get(a)["status"], "queued")
+        b = db.create("movie", 901, None, "B (2021)", "小红", "pending")
+        c = db.create("movie", 902, None, "C (2022)", "小刚", "pending")
+        self.assertEqual(db.batch([b, c, a], "approve"), [b, c])   # a 已不是待审批，不受影响
+        db.update(b, status="failed")
+        self.assertEqual(db.batch([b, c], "retry"), [b])
+        db.update(c, status="done")
+        self.assertEqual(db.batch([a, b, c], "delete"), [c])       # 进行中的不删
+
+
+class UserLinkTest(unittest.TestCase):
+    def test_stats_and_quota_count(self):
+        db.create("movie", 950, None, "P (2020)", "Alice", "queued", "u1")
+        r = db.create("movie", 951, None, "Q (2020)", "alice", "queued", "u1")
+        db.update(r, status="done")
+        x = db.create("movie", 952, None, "R (2020)", "ALICE", "rejected", "u1")
+        self.assertEqual(db.count_recent("alice"), 2)          # 大小写不敏感，被拒绝的不算
+        st = {s["requester"].lower(): s for s in db.user_stats()}
+        self.assertEqual(st["alice"]["total"], 3)
+        self.assertEqual(st["alice"]["done"], 1)
+        self.assertEqual(len(db.list_all("alice")), 3)
+
+    def test_emby_check(self):
+        from app import emby
+        from app.config import cfg
+        cfg.EMBY_URL, cfg.EMBY_KEY = "http://x", "k"
+        emby._cache.update(t=__import__("time").time(), users={
+            "bob": {"id": "b1", "name": "Bob", "disabled": False},
+            "old": {"id": "o1", "name": "Old", "disabled": True}})
+        run = asyncio.run
+        self.assertEqual(run(emby.check("Bob")), (True, "", "b1"))
+        ok, why, _ = run(emby.check("old"))
+        self.assertFalse(ok); self.assertIn("停用", why)
+        ok, why, _ = run(emby.check("ghost"))
+        self.assertFalse(ok); self.assertIn("没有该用户", why)
+        cfg.EMBY_URL = ""
+        self.assertEqual(run(emby.check("anyone")), (True, "", ""))  # Emby 没配则放行
+
+
 class PipelineTest(unittest.TestCase):
     def test_fallback_and_cleanup(self):
         meta = {"names": ["Dune: Part Two"], "year": "2024", "episodes": 0}

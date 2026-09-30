@@ -2,30 +2,69 @@
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>求片桥接</title>
 <style>
-:root{--bg:#fff;--fg:#1b1b1f;--mut:#777;--line:#e3e3e8;--ok:#1a7f37;--bad:#c62828;--run:#0b63ce}
-@media(prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e8e8ec;--mut:#9a9aa3;--line:#2c2c33;--ok:#4cc26b;--bad:#ef6a6a;--run:#5aa2ff}}
+:root{--bg:#fff;--fg:#1b1b1f;--mut:#777;--line:#e3e3e8;--ok:#1a7f37;--bad:#c62828;--run:#0b63ce;--warn:#b26a00}
+@media(prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e8e8ec;--mut:#9a9aa3;--line:#2c2c33;--ok:#4cc26b;--bad:#ef6a6a;--run:#5aa2ff;--warn:#e0a13a}}
 body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
-.s-done{color:var(--ok)}.s-failed{color:var(--bad)}.s-searching,.s-downloading,.s-queued{color:var(--run)}
-small{color:var(--mut)}button{cursor:pointer}details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 12px}
+button,select{cursor:pointer;padding:4px 10px}
+.wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+.s-done{color:var(--ok)}.s-failed,.s-rejected{color:var(--bad)}.s-searching,.s-downloading,.s-queued{color:var(--run)}.s-pending{color:var(--warn)}
+small{color:var(--mut)}details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut)}
 </style></head><body>
 <h3>求片请求</h3>
-<table><thead><tr><th>#</th><th>片名</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<div class="bar">
+  <select id="flt" onchange="render()">
+    <option value="">全部</option><option value="pending">待审批</option><option value="active">进行中</option>
+    <option value="failed">失败</option><option value="done">已完成</option><option value="rejected">已拒绝</option>
+  </select>
+  <select id="usr" onchange="render()"><option value="">所有用户</option></select>
+  <button onclick="batch('approve')">批量通过</button>
+  <button onclick="batch('reject')">批量拒绝</button>
+  <button onclick="batch('retry')">批量重试</button>
+  <button onclick="batch('delete')">批量删除</button>
+  <small id="cnt"></small>
+</div>
+<div class="wrap"><table><thead><tr>
+  <th><input type="checkbox" id="all" onchange="toggleAll(this.checked)"></th>
+  <th>#</th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="rows"></tbody></table></div>
 <script>
 let tk=localStorage.getItem('tk')||prompt('BRIDGE_TOKEN');localStorage.setItem('tk',tk||'');
-const H={'X-Token':tk};
-const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const H={'X-Token':tk,'Content-Type':'application/json'};
+const NAME={pending:'待审批',queued:'排队中',searching:'搜索中',downloading:'下载中',done:'已完成',failed:'失败',rejected:'已拒绝'};
+const esc=s=>String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let data=[],sel=new Set();
 async function load(){
   const r=await fetch('/api/requests',{headers:H});
   if(r.status==401){localStorage.removeItem('tk');return}
-  const d=await r.json();
-  document.getElementById('rows').innerHTML=d.map(x=>`<tr><td>${x.id}</td>
+  data=await r.json();fillUsers();render();
+}
+function fillUsers(){
+  const u=document.getElementById('usr'),cur=u.value;
+  const names=[...new Set(data.map(x=>x.requester).filter(Boolean))].sort();
+  u.innerHTML='<option value="">所有用户</option>'+names.map(n=>`<option ${n==cur?'selected':''}>${esc(n)}</option>`).join('');
+}
+function shown(){
+  const f=document.getElementById('flt').value,u=document.getElementById('usr').value;
+  return data.filter(x=>(!u||x.requester==u)&&(!f||(f=='active'?['queued','searching','downloading'].includes(x.status):x.status==f)));
+}
+function render(){
+  const d=shown();
+  document.getElementById('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
+  document.getElementById('rows').innerHTML=d.map(x=>`<tr>
+  <td><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)"></td><td>${x.id}</td>
   <td>${esc(x.title)}${x.season?` <small>S${x.season}</small>`:''}
     <details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
-  <td class="s-${x.status}">${x.status}<br><small>${esc(x.error)}</small></td>
-  <td><small>${esc(x.picked)}</small></td>
-  <td>${x.status=='failed'?`<button onclick="retry(${x.id},0)">继续换下一个</button> <button onclick="retry(${x.id},1)">重来</button>`:''}</td></tr>`).join('');
+  <td>${esc(x.requester)||'<small>-</small>'}</td>
+  <td class="s-${x.status}">${NAME[x.status]||x.status}<br><small>${esc(x.error)}</small></td>
+  <td><small>${esc(x.picked)}</small></td></tr>`).join('');
 }
-async function retry(id,reset){await fetch(`/api/requests/${id}/retry?reset=${reset}`,{method:'POST',headers:H});load()}
+function pick(id,on){on?sel.add(id):sel.delete(id);render()}
+function toggleAll(on){shown().forEach(x=>on?sel.add(x.id):sel.delete(x.id));render()}
+async function batch(action){
+  if(!sel.size)return alert('先勾选要处理的请求');
+  if(action=='delete'&&!confirm('确定删除选中的记录？'))return;
+  await fetch('/api/requests/batch',{method:'POST',headers:H,body:JSON.stringify({action,ids:[...sel]})});
+  sel.clear();document.getElementById('all').checked=false;load();
+}
 load();setInterval(load,5000);
 </script></body></html>

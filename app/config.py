@@ -12,6 +12,8 @@ def _i(k, d):
 class cfg:
     TOKEN = os.environ.get("BRIDGE_TOKEN", "change-me")
     DB_PATH = os.environ.get("DB_PATH", "/data/bridge.db")
+    APPROVAL = os.environ.get("BRIDGE_APPROVAL", "manual")  # manual=新请求先进"待审批"，在桥接页批量通过；auto=直接处理
+    QUOTA_WEEKLY = int(os.environ.get("USER_QUOTA_WEEKLY", "0"))  # 每人每 7 天最多求几部，0=不限
     TMDB_KEY = os.environ.get("TMDB_API_KEY", "")
 
     PANSOU_URL = os.environ.get("PANSOU_URL", "http://pansou:8888")

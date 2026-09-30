@@ -26,20 +26,25 @@ def conn():
             id INTEGER PRIMARY KEY AUTOINCREMENT, media_type TEXT, tmdb_id INTEGER, season INTEGER,
             title TEXT, status TEXT, picked TEXT DEFAULT '', error TEXT DEFAULT '',
             tried TEXT DEFAULT '[]', log TEXT DEFAULT '[]', created REAL, updated REAL)""")
+        cols = [r[1] for r in _conn.execute("PRAGMA table_info(requests)")]
+        if "emby_user_id" not in cols:
+            _conn.execute("ALTER TABLE requests ADD COLUMN emby_user_id TEXT DEFAULT ''")
+        if "requester" not in cols:
+            _conn.execute("ALTER TABLE requests ADD COLUMN requester TEXT DEFAULT ''")
         _conn.commit()
     return _conn
 
 
-def create(media_type, tmdb_id, season, title):
+def create(media_type, tmdb_id, season, title, requester="", status="queued", emby_user_id=""):
     with _lock:
         c = conn()
         dup = c.execute("SELECT id FROM requests WHERE media_type=? AND tmdb_id=? AND IFNULL(season,0)=IFNULL(?,0)"
-                        " AND status!='failed'", (media_type, tmdb_id, season)).fetchone()
+                        " AND status NOT IN ('failed','rejected')", (media_type, tmdb_id, season)).fetchone()
         if dup:
             return None
-        cur = c.execute("INSERT INTO requests(media_type,tmdb_id,season,title,status,created,updated)"
-                        " VALUES(?,?,?,?,?,?,?)",
-                        (media_type, tmdb_id, season, title, "queued", time.time(), time.time()))
+        cur = c.execute("INSERT INTO requests(media_type,tmdb_id,season,title,status,requester,emby_user_id,created,updated)"
+                        " VALUES(?,?,?,?,?,?,?,?,?)",
+                        (media_type, tmdb_id, season, title, status, requester, emby_user_id, time.time(), time.time()))
         c.commit()
         return cur.lastrowid
 
@@ -64,12 +69,70 @@ def log(rid, msg):
     update(rid, log=json.dumps(lg[-60:], ensure_ascii=False))
 
 
-def list_all():
+def list_all(user=""):
     with _lock:
-        return [dict(r) for r in conn().execute("SELECT * FROM requests ORDER BY id DESC LIMIT 200")]
+        if user:
+            q = conn().execute("SELECT * FROM requests WHERE requester=? COLLATE NOCASE ORDER BY id DESC LIMIT 200", (user,))
+        else:
+            q = conn().execute("SELECT * FROM requests ORDER BY id DESC LIMIT 200")
+        return [dict(r) for r in q]
+
+
+def count_recent(requester, days=7):
+    """近 N 天该用户的求片数（被拒绝的不算）。"""
+    with _lock:
+        return conn().execute("SELECT COUNT(*) FROM requests WHERE requester=? COLLATE NOCASE AND created>? AND status!='rejected'",
+                              (requester, time.time() - days * 86400)).fetchone()[0]
+
+
+def user_stats():
+    with _lock:
+        rows = conn().execute("""SELECT requester, MAX(emby_user_id) emby_user_id, COUNT(*) total,
+            SUM(status='done') done, SUM(status='failed') failed, SUM(status='pending') pending,
+            SUM(status='rejected') rejected, MAX(created) last FROM requests
+            WHERE requester!='' GROUP BY requester COLLATE NOCASE ORDER BY last DESC""")
+        return [dict(r) for r in rows]
 
 
 def unfinished():
     with _lock:
         return [r["id"] for r in conn().execute(
             "SELECT id FROM requests WHERE status IN ('queued','searching','downloading')")]
+
+
+def promote(media_type, tmdb_id, season):
+    """把同一部片的"待审批"记录转成排队；没有则返回 None。"""
+    with _lock:
+        c = conn()
+        r = c.execute("SELECT id FROM requests WHERE media_type=? AND tmdb_id=? AND IFNULL(season,0)=IFNULL(?,0)"
+                      " AND status='pending'", (media_type, tmdb_id, season)).fetchone()
+        if not r:
+            return None
+        c.execute("UPDATE requests SET status='queued', updated=? WHERE id=?", (time.time(), r["id"]))
+        c.commit()
+        return r["id"]
+
+
+def batch(ids, action):
+    """approve/reject 只作用于待审批；retry 只作用于失败/已拒绝；delete 作用于非进行中的记录。返回受影响的 id。"""
+    rules = {"approve": ("pending", "queued"), "reject": ("pending", "rejected"),
+             "retry": ("failed,rejected", "queued")}
+    done = []
+    with _lock:
+        c = conn()
+        for i in ids:
+            r = c.execute("SELECT status FROM requests WHERE id=?", (i,)).fetchone()
+            if not r:
+                continue
+            if action == "delete":
+                if r["status"] in ("queued", "searching", "downloading"):
+                    continue
+                c.execute("DELETE FROM requests WHERE id=?", (i,))
+            else:
+                src, dst = rules[action]
+                if r["status"] not in src.split(","):
+                    continue
+                c.execute("UPDATE requests SET status=?, updated=? WHERE id=?", (dst, time.time(), i))
+            done.append(i)
+        c.commit()
+    return done
