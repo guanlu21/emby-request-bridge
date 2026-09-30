@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+httpx
+p115client

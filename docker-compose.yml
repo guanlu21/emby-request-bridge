@@ -1,0 +1,32 @@
+services:
+  seerr:                       # 求片前端（Seerr，支持 Emby）
+    image: ghcr.io/seerr-team/seerr:latest
+    init: true
+    container_name: seerr
+    environment: [TZ=Asia/Shanghai, PORT=5055]
+    ports: ["5055:5055"]
+    volumes: ["./data/seerr:/app/config"]   # 目录属主需为 1000:1000
+    restart: unless-stopped
+
+  prowlarr:                    # 磁力/种子站聚合，在网页里添加站点
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment: [PUID=1000, PGID=1000, TZ=Asia/Shanghai]
+    ports: ["9696:9696"]
+    volumes: ["./data/prowlarr:/config"]
+    restart: unless-stopped
+
+  pansou:                      # 网盘分享链接搜索（115 + 磁力）
+    image: ghcr.io/fish2018/pansou:latest   # 镜像名/端口请以 PanSou 官方 README 为准
+    container_name: pansou
+    ports: ["8888:8888"]
+    restart: unless-stopped
+
+  bridge:
+    build: .
+    container_name: request-bridge
+    env_file: .env
+    ports: ["8686:8686"]
+    volumes: ["./data/bridge:/data"]
+    depends_on: [seerr, prowlarr, pansou]
+    restart: unless-stopped
