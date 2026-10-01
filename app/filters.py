@@ -23,6 +23,7 @@ class Rules:
     max_size: float = 5 * GB
     pref_min: float = 1 * GB   # 偏好区间，只影响排序
     pref_max: float = 3 * GB
+    keep_min: float = 100 * 1024 ** 2  # 下载完成后保留文件的最小体积（小于它的当样片/花絮删掉）
 
 
 def parse_resolution(title: str) -> int:
@@ -41,7 +42,7 @@ def is_video(name: str) -> bool:
 def file_ok(name: str, size: float, rules: Rules) -> bool:
     if not is_video(name) or has_watermark(name):
         return False
-    if not (rules.min_size <= size <= rules.max_size):
+    if not (rules.keep_min <= size <= rules.max_size):
         return False
     res = parse_resolution(name)
     return res == 0 or res >= rules.min_res  # 文件名没写分辨率时，靠体积区间兜底

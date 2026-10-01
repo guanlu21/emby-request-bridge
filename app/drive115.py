@@ -124,6 +124,9 @@ class P115Drive:
                 out += await self.list_files(int(it["cid"]))
         return out
 
+    async def rename(self, fid, new_name: str):
+        await self._call("fs_rename", {f"files_new_name[{fid}]": new_name})
+
     async def move(self, ids, dest):
         await self._call("fs_move", {"pid": dest, **_ids(ids)})
 
@@ -302,6 +305,9 @@ class OpenDrive:
             if page >= int(data.get("page_count") or 1):
                 return "running"
             page += 1
+
+    async def rename(self, fid, new_name: str):
+        await self._call("POST", "/open/ufile/update", data={"file_id": fid, "file_name": new_name})
 
     async def move(self, ids, dest):
         await self._call("POST", "/open/ufile/move", data={"file_ids": ",".join(map(str, ids)), "to_cid": dest})

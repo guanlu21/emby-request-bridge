@@ -40,7 +40,10 @@ async def tmdb_meta(media_type: str, tmdb_id: int, season):
     episodes = 0
     if media_type == "tv" and season:
         episodes = len((await tmdb.get(f"{path}/season/{season}")).get("episodes", []))
-    return {"names": names, "year": (loc.get(dkey) or "")[:4], "episodes": episodes}
+    countries = loc.get("origin_country") or [c.get("iso_3166_1", "") for c in loc.get("production_countries", [])]
+    return {"names": names, "year": (loc.get(dkey) or "")[:4], "episodes": episodes,
+            "genres": [g["id"] for g in loc.get("genres", [])], "lang": loc.get("original_language") or "",
+            "countries": countries}
 
 
 def parse_115_share(url: str, password: str = ""):

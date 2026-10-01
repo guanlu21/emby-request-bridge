@@ -20,9 +20,20 @@ SCHEMA = [
     {"group": "115 网盘", "fields": [
         F("p115_cookie", "115 Cookie", "password", "没有 AppID 时用它登录 115：浏览器登录 115.com 后复制包含 UID、CID、SEID 的完整 Cookie。Cookie 会失效，失效后重新复制即可；已扫码授权开放平台时，它只用于转存分享链接"),
         F("p115_app_id", "115 开放平台 AppID（可选）", help="有 AppID 就扫码授权，更稳定、不会过期；没有就先只填 Cookie。建议给本服务单独申请，别和 LitePan 共用"),
-        F("p115_dest_movie_cid", "电影目录", "folder", "整理前的正式目录，LitePan 监控它"),
-        F("p115_dest_tv_cid", "剧集目录", "folder", "同上，放剧集"),
-        F("p115_staging_cid", "暂存目录", "folder", "下载先放这里，合格才移走；必须在 LitePan 监控范围之外"),
+        F("p115_staging_cid", "下载目录（云下载）", "folder", "磁力先离线到这里，过滤合格后才移走；建议直接选 115 的「云下载」目录。不要选 LitePan 要生成 STRM 的目录"),
+        F("p115_dest_movie_cid", "电影目录（旧，可选）", "folder", "只有没设「影视根目录」时才用"),
+        F("p115_dest_tv_cid", "剧集目录（旧，可选）", "folder", "只有没设「影视根目录」时才用"),
+    ]},
+    {"group": "入库分类", "fields": [
+        F("library_root_cid", "影视根目录", "folder", "例如「影视」。下载完成后按 TMDB 信息自动放进下面的分类子目录（不存在会自动创建）"),
+        F("dir_movie", "电影目录名", default="电影"),
+        F("dir_tv", "电视剧目录名", default="电视剧"),
+        F("dir_anime", "动漫目录名", help="电视剧类动画（日本、国产、韩国）和日本动画电影放这里", default="动漫"),
+        F("dir_variety", "综艺目录名", default="综艺"),
+        F("dir_doc", "纪录片目录名", default="纪录片"),
+        F("region_names", "地区目录名", help="依次是：国产、港台、日韩、欧美，用逗号分隔", default="国产,港台,日韩,欧美"),
+        F("tv_suffix", "电视剧地区目录后缀", help="电视剧地区目录 = 地区名 + 后缀，如 国产剧", default="剧"),
+        F("keep_min_mb", "下载后保留的最小文件（MB）", "number", "只保留视频文件，小于它的（样片、花絮）直接删除", default=100),
     ]},
     {"group": "资源搜索", "fields": [
         F("pansou_url", "PanSou 地址", help="例如 http://192.168.1.10:8888；留空则不搜分享链接"),

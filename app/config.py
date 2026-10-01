@@ -29,6 +29,16 @@ class _Env:
     KITE_URL = os.environ.get("KITE_URL", "")
     KITE_TOKEN = os.environ.get("KITE_TOKEN", "")
 
+    LIBRARY_ROOT_CID = _i("LIBRARY_ROOT_CID", 0)
+    DIR_MOVIE = os.environ.get("DIR_MOVIE", "电影")
+    DIR_TV = os.environ.get("DIR_TV", "电视剧")
+    DIR_ANIME = os.environ.get("DIR_ANIME", "动漫")
+    DIR_VARIETY = os.environ.get("DIR_VARIETY", "综艺")
+    DIR_DOC = os.environ.get("DIR_DOC", "纪录片")
+    REGION_NAMES = os.environ.get("REGION_NAMES", "国产,港台,日韩,欧美")
+    TV_SUFFIX = os.environ.get("TV_SUFFIX", "剧")
+    KEEP_MIN_MB = _f("KEEP_MIN_MB", 100)
+
     P115_APP_ID = os.environ.get("P115_APP_ID", "")
     P115_COOKIE = os.environ.get("P115_COOKIE", "")
     P115_DEST_MOVIE_CID = _i("P115_DEST_MOVIE_CID", 0)

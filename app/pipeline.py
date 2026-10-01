@@ -7,6 +7,7 @@ import httpx
 
 from . import db, litepan
 from .config import cfg
+from . import classify
 from .filters import Rules, pick_best_file, select_files
 from .sources import Candidate, build_candidates, parse_115_share
 
@@ -17,19 +18,20 @@ class SetupError(Exception):
 
 def rules() -> Rules:
     return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3,
-                 cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3)
+                 cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3, cfg.KEEP_MIN_MB * 1024 ** 2)
 
 
 class Pipeline:
     def __init__(self, drive, meta_fn, search_fn, after_fn, poll=None):
+        self._dest_lock = asyncio.Lock()
         self.drive, self.meta_fn, self.search_fn, self.after_fn = drive, meta_fn, search_fn, after_fn
         self.poll = cfg.POLL_SECONDS if poll is None else poll
 
     async def run(self, rid: int):
         r = db.get(rid)
         try:
-            if not cfg.P115_STAGING_CID or not (cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID):
-                raise RuntimeError("还没有设置 115 的暂存目录和电影/剧集目录，请管理员到「设置」里选择")
+            if not cfg.P115_STAGING_CID or not self._library_cid(r):
+                raise RuntimeError("还没有设置 115 的下载目录和「影视根目录」，请管理员到「设置 → 115 网盘 / 入库分类」里选择")
             await self.preflight(r)
             db.update(rid, status="searching", error="")
             meta = await self.meta_fn(r)
@@ -75,16 +77,20 @@ class Pipeline:
             db.log(rid, f"异常: {e!r}")
             db.update(rid, status="failed", error=str(e)[:200])
 
+    @staticmethod
+    def _library_cid(r) -> int:
+        """分类入库的根目录；没设就退回旧的电影/剧集目录。"""
+        return cfg.LIBRARY_ROOT_CID or (cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID)
+
     async def preflight(self, r):
-        """先确认 115 暂存目录和正式目录能访问，别等下载完才发现目录 ID 不对。"""
-        dest = cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID
-        for label, cid in (("暂存目录", cfg.P115_STAGING_CID), ("电影目录" if r["media_type"] == "movie" else "剧集目录", dest)):
+        """先确认 115 下载目录和入库目录能访问，别等下载完才发现目录 ID 不对。"""
+        for label, cid in (("下载目录", cfg.P115_STAGING_CID), ("影视根目录", self._library_cid(r))):
             try:
                 await self.drive.list_dirs(cid)
             except AttributeError:
                 return  # 测试用的假驱动没有 list_dirs
             except Exception as e:  # noqa
-                raise SetupError(f"115 {label}无法访问（{e}）。请到「设置 → 115 网盘」重新选择该目录，并点「测试 115 连接」")
+                raise SetupError(f"115 {label}无法访问（{e}）。请到「设置 → 115 网盘 / 入库分类」重新选择该目录，并点「测试 115 连接」")
 
     async def run_manual(self, rid: int, url: str):
         """管理员手动指定一个 115 分享链接或磁力链接：跳过搜索和标题筛选，仍会按文件规则过滤视频。"""
@@ -110,11 +116,37 @@ class Pipeline:
             db.update(rid, status="failed", error=str(e)[:200])
 
     async def dest_dir(self, r, meta) -> int:
-        name = f"{meta['names'][0]} ({meta['year']})".replace("/", " ")
-        if r["media_type"] == "movie":
-            return await self.drive.ensure_dir(cfg.P115_DEST_MOVIE_CID, name)
-        show = await self.drive.ensure_dir(cfg.P115_DEST_TV_CID, name)
-        return await self.drive.ensure_dir(show, f"Season {r['season']:02d}")
+        """分类目录 + 片名目录（+ Season 目录）。同一时刻只允许一个请求在建目录，避免重复。"""
+        name = classify.sanitize(f"{meta['names'][0]} ({meta['year']})" if meta.get("year") else meta["names"][0])
+        parts = classify.classify(r["media_type"], meta) if cfg.LIBRARY_ROOT_CID else []
+        parts = parts + [name] + ([f"Season {r['season']:02d}"] if r["media_type"] == "tv" else [])
+        async with self._dest_lock:
+            cid = self._library_cid(r)
+            for p in parts:
+                cid = await self.drive.ensure_dir(cid, p)
+        db.log(r["id"], "入库位置：" + " / ".join(parts))
+        return cid
+
+    async def rename_files(self, rid, files, r, meta):
+        """按 Emby 的命名习惯改名；任何一步失败都只记日志，保留原文件名，不影响入库。"""
+        try:
+            fn = self.drive.rename
+        except Exception:  # noqa
+            return
+        used, done = set(), 0
+        for f in files:
+            new = classify.target_name(r["media_type"], meta["names"][0], meta.get("year"), r["season"], f["name"], used)
+            if not new or new == f["name"]:
+                continue
+            try:
+                await fn(f["id"], new)
+                f["name"] = new
+                done += 1
+            except Exception as e:  # noqa
+                db.log(rid, f"重命名失败（保留原名）：{e}")
+                return
+        if done:
+            db.log(rid, f"已按 Emby 命名规则重命名 {done} 个文件")
 
     async def attempt(self, r, meta, c) -> bool:
         rid, stage = r["id"], None
@@ -148,6 +180,7 @@ class Pipeline:
                 dest = await self.dest_dir(r, meta)
             except Exception as e:  # noqa
                 raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
+            await self.rename_files(rid, keep, r, meta)
             await self.drive.move([f["id"] for f in keep], dest)
             return True
         except SetupError:

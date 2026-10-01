@@ -39,7 +39,8 @@ class Filters(unittest.TestCase):
         self.assertFalse(file_ok("a.nfo", 3 * GB, R))          # 非视频
         self.assertFalse(file_ok("sample.mkv", 50 * 1024 ** 2, R))  # 太小
         self.assertTrue(file_ok("a.1080p.mkv", 0.6 * GB, R))    # 500MB 以上可以
-        self.assertFalse(file_ok("a.1080p.mkv", 0.3 * GB, R))
+        self.assertTrue(file_ok("a.1080p.mkv", 0.3 * GB, R))        # 下载后保留的下限是 100MB（不是 500MB）
+        self.assertFalse(file_ok("a.1080p.mkv", 60 * 1024 ** 2, R))   # 60MB 当样片删掉
         self.assertFalse(file_ok("a.mkv", 8 * GB, R))           # 太大
         self.assertFalse(file_ok("a.480p.mkv", 2 * GB, R))      # 分辨率不足
         self.assertTrue(file_ok("a.mkv", 2 * GB, R))            # 没标分辨率，体积兜底
@@ -421,7 +422,7 @@ class SetupErrorTest(unittest.TestCase):
             async def list_dirs(self, cid): raise RuntimeError("父目录不存在")
         rid = db.create("movie", 961, None, "Dune (2024)")
         r = self._run(D(), rid)
-        self.assertEqual(r["status"], "failed"); self.assertIn("暂存目录无法访问", r["error"])
+        self.assertEqual(r["status"], "failed"); self.assertIn("下载目录无法访问", r["error"])
 
     def test_reset_clears_tried(self):
         rid = db.create("movie", 962, None, "X (2020)")
@@ -498,6 +499,117 @@ class P115AdapterTest(unittest.TestCase):
         r = db.get(rid)
         self.assertEqual((r["status"], drive.n_add, r["tried"]), ("failed", 1, "[]"))
         self.assertIn("版本不匹配", r["error"])
+
+
+class ClassifyTest(unittest.TestCase):
+    def test_regions_and_categories(self):
+        from app.classify import classify
+        m = lambda lang, cs, g=(): {"lang": lang, "countries": list(cs), "genres": list(g)}
+        self.assertEqual(classify("movie", m("zh", ["CN"], [878])), ["电影", "国产"])          # 流浪地球
+        self.assertEqual(classify("movie", m("zh", ["HK"], [28])), ["电影", "港台"])
+        self.assertEqual(classify("movie", m("cn", ["HK"])), ["电影", "港台"])               # 粤语
+        self.assertEqual(classify("movie", m("zh", ["CN", "HK"])), ["电影", "国产"])          # 合拍片
+        self.assertEqual(classify("movie", m("ja", ["JP"], [18])), ["电影", "日韩"])
+        self.assertEqual(classify("movie", m("en", ["US", "GB"])), ["电影", "欧美"])
+        self.assertEqual(classify("tv", m("zh", ["CN"])), ["电视剧", "国产剧"])
+        self.assertEqual(classify("tv", m("ko", ["KR"])), ["电视剧", "日韩剧"])
+        self.assertEqual(classify("tv", m("en", ["US"])), ["电视剧", "欧美剧"])
+        self.assertEqual(classify("tv", m("ja", ["JP"], [16, 10759])), ["动漫"])               # 日本动画剧集
+        self.assertEqual(classify("tv", m("zh", ["CN"], [16])), ["动漫"])                     # 国漫
+        self.assertEqual(classify("movie", m("ja", ["JP"], [16])), ["动漫"])                  # 日本动画电影
+        self.assertEqual(classify("movie", m("en", ["US"], [16, 10751])), ["电影", "欧美"])    # 欧美动画电影不进动漫
+        self.assertEqual(classify("tv", m("en", ["US"], [16, 35])), ["电视剧", "欧美剧"])      # 欧美动画剧不进动漫
+        self.assertEqual(classify("tv", m("zh", ["CN"], [10764])), ["综艺"])
+        self.assertEqual(classify("movie", m("en", ["US"], [99])), ["纪录片"])
+        self.assertEqual(classify("movie", {}), ["电影"])                                   # 没有 TMDB 信息
+
+    def test_naming(self):
+        from app.classify import episode_of, target_name
+        self.assertEqual(episode_of("笑傲江湖.2001.E05.1080p.mkv"), 5)
+        self.assertEqual(episode_of("Show.S01E12.1080p.WEB-DL.mkv"), 12)
+        self.assertEqual(episode_of("笑傲江湖 第07集 4K.mp4"), 7)
+        self.assertEqual(episode_of("[字幕组][09][1080P].mkv"), 9)
+        self.assertEqual(episode_of("某剧 - 03 [WebRip 1080p].mkv"), 3)
+        self.assertIsNone(episode_of("某剧.1080p.H264.mkv"))                              # 分辨率/编码里的数字不是集数
+        self.assertEqual(target_name("movie", "流浪地球", "2019", None, "x.2019.1080p.MKV", set()), "流浪地球 (2019).mkv")
+        used = set()
+        self.assertEqual(target_name("tv", "笑傲江湖", "2001", 1, "E05.mkv", used), "笑傲江湖 (2001) - S01E05.mkv")
+        self.assertIsNone(target_name("tv", "笑傲江湖", "2001", 1, "E05.2160p.mkv", used))   # 重复集数不改名
+        self.assertIsNone(target_name("tv", "笑傲江湖", "2001", 1, "无法识别.mkv", used))
+
+
+class LibraryPathTest(unittest.TestCase):
+    def test_classified_destination_and_rename(self):
+        from app.config import cfg
+        cfg.LIBRARY_ROOT_CID = 5000
+
+        class D(FakeDrive):
+            def __init__(self):
+                super().__init__(); self.tree, self.renames, self.cid = {}, [], 6000
+            async def ensure_dir(self, parent, name):
+                if (parent, name) not in self.tree:
+                    self.cid += 1; self.tree[(parent, name)] = self.cid
+                return self.tree[(parent, name)]
+            async def list_files(self, cid):
+                return [{"id": 1, "name": "流浪地球.2019.1080p.mkv", "size": 3 * GB},
+                        {"id": 2, "name": "花絮.mp4", "size": 80 * 1024 ** 2},        # 小于 100MB：删
+                        {"id": 3, "name": "readme.txt", "size": 100}]                 # 非视频：删
+            async def rename(self, fid, new): self.renames.append((fid, new))
+        drive = D()
+        meta = {"names": ["流浪地球"], "year": "2019", "episodes": 0, "genres": [878], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("magnet", "流浪地球 2019 1080p WEB-DL", "magnet:?xt=urn:btih:" + "9" * 40, size=3 * GB)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        class D2(D):
+            async def offline_state(self, h): return "done"
+        drive = D2()
+        rid = db.create("movie", 980, None, "流浪地球 (2019)")
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual(r["status"], "done", r["log"])
+        names = [k[1] for k in drive.tree]
+        self.assertEqual(names, ["电影", "国产", "流浪地球 (2019)"])                      # 影视/电影/国产/片名
+        self.assertEqual(drive.renames, [(1, "流浪地球 (2019).mkv")])
+        self.assertEqual(drive.moved[0][0], [1])                                          # 只移动大于 100MB 的视频
+        self.assertIn("入库位置：电影 / 国产 / 流浪地球 (2019)", r["log"])
+        cfg.LIBRARY_ROOT_CID = 0
+
+
+class LibraryTvTest(unittest.TestCase):
+    def test_tv_destination_and_episode_rename(self):
+        from app.config import cfg
+        cfg.LIBRARY_ROOT_CID = 5000
+
+        class D(FakeDrive):
+            def __init__(self):
+                super().__init__(); self.tree, self.renames, self.cid = {}, [], 7000
+            async def ensure_dir(self, parent, name):
+                if (parent, name) not in self.tree:
+                    self.cid += 1; self.tree[(parent, name)] = self.cid
+                return self.tree[(parent, name)]
+            async def offline_state(self, h): return "done"
+            async def list_files(self, cid):
+                return [{"id": 11, "name": "笑傲江湖.2001.E01.1080p.mkv", "size": 2 * GB},
+                        {"id": 12, "name": "笑傲江湖.2001.E02.1080p.mkv", "size": 2 * GB},
+                        {"id": 13, "name": "笑傲江湖.2001.第3集.1080p.mkv", "size": 2 * GB},
+                        {"id": 14, "name": "sample.mkv", "size": 30 * 1024 ** 2}]
+            async def rename(self, fid, new): self.renames.append((fid, new))
+        drive = D()
+        meta = {"names": ["笑傲江湖"], "year": "2001", "episodes": 40, "genres": [18], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("magnet", "笑傲江湖 2001 全40集 1080p", "magnet:?xt=urn:btih:" + "8" * 40, size=80 * GB)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        rid = db.create("tv", 981, 1, "笑傲江湖 (2001)")
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual(r["status"], "done", r["log"])
+        self.assertEqual([k[1] for k in drive.tree], ["电视剧", "国产剧", "笑傲江湖 (2001)", "Season 01"])
+        self.assertEqual(drive.renames, [(11, "笑傲江湖 (2001) - S01E01.mkv"), (12, "笑傲江湖 (2001) - S01E02.mkv"),
+                                         (13, "笑傲江湖 (2001) - S01E03.mkv")])
+        self.assertEqual(drive.moved[0][0], [11, 12, 13])
+        cfg.LIBRARY_ROOT_CID = 0
 
 
 class ApprovalTest(unittest.TestCase):
