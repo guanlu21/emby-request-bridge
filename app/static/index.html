@@ -83,7 +83,7 @@ dialog label{display:flex;gap:8px;padding:5px 0}
     <select id="flt" onchange="renderAdmin()"><option value="">全部状态</option><option value="pending">待审批</option><option value="active">进行中</option><option value="failed">失败</option><option value="done">已完成</option><option value="rejected">已拒绝</option></select>
     <select id="usr" onchange="renderAdmin()"><option value="">所有用户</option></select>
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
-    <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('delete')">批量删除</button>
+    <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button>
     <small id="cnt"></small></div>
   <div class="wrap"><table><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>

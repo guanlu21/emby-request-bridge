@@ -11,6 +11,10 @@ from .filters import Rules, pick_best_file, select_files
 from .sources import Candidate, build_candidates, parse_115_share
 
 
+class SetupError(Exception):
+    """配置/环境问题（目录无效、115 没登录等）：换资源也没用，直接终止，且不把候选记为已试。"""
+
+
 def rules() -> Rules:
     return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3,
                  cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3)
@@ -26,6 +30,7 @@ class Pipeline:
         try:
             if not cfg.P115_STAGING_CID or not (cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID):
                 raise RuntimeError("还没有设置 115 的暂存目录和电影/剧集目录，请管理员到「设置」里选择")
+            await self.preflight(r)
             db.update(rid, status="searching", error="")
             meta = await self.meta_fn(r)
             res = await self.search_fn(meta, r["media_type"], r["season"])
@@ -50,7 +55,12 @@ class Pipeline:
             db.update(rid, status="downloading")
             for n, c in enumerate(cands[:cfg.MAX_ATTEMPTS], 1):
                 db.log(rid, f"尝试 {n}: [{c.kind}/{c.src}] {c.title[:60]} (分 {c.score})")
-                ok = await self.attempt(r, meta, c)
+                try:
+                    ok = await self.attempt(r, meta, c)
+                except SetupError as e:
+                    db.log(rid, str(e))
+                    db.update(rid, status="failed", error=str(e)[:200])
+                    return
                 tried.add(c.url)
                 db.update(rid, tried=json.dumps(sorted(tried)))
                 if ok:
@@ -58,9 +68,23 @@ class Pipeline:
                     await self.after_fn(r)
                     return
             db.update(rid, status="failed", error="所有候选均失败或没有符合条件的资源")
+        except SetupError as e:
+            db.log(rid, str(e))
+            db.update(rid, status="failed", error=str(e)[:200])
         except Exception as e:  # noqa
             db.log(rid, f"异常: {e!r}")
             db.update(rid, status="failed", error=str(e)[:200])
+
+    async def preflight(self, r):
+        """先确认 115 暂存目录和正式目录能访问，别等下载完才发现目录 ID 不对。"""
+        dest = cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID
+        for label, cid in (("暂存目录", cfg.P115_STAGING_CID), ("电影目录" if r["media_type"] == "movie" else "剧集目录", dest)):
+            try:
+                await self.drive.list_dirs(cid)
+            except AttributeError:
+                return  # 测试用的假驱动没有 list_dirs
+            except Exception as e:  # noqa
+                raise SetupError(f"115 {label}无法访问（{e}）。请到「设置 → 115 网盘」重新选择该目录，并点「测试 115 连接」")
 
     async def run_manual(self, rid: int, url: str):
         """管理员手动指定一个 115 分享链接或磁力链接：跳过搜索和标题筛选，仍会按文件规则过滤视频。"""
@@ -96,6 +120,9 @@ class Pipeline:
         rid, stage = r["id"], None
         try:
             stage = await self.drive.mkdir(cfg.P115_STAGING_CID, f"req{rid}-{int(time.time())}")
+        except Exception as e:  # noqa
+            raise SetupError(f"无法在 115 暂存目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择暂存目录")
+        try:
             if c.kind == "share":
                 code, pw = parse_115_share(c.url, c.password)
                 await self.drive.receive_share(code, pw, stage)
@@ -117,8 +144,14 @@ class Pipeline:
                 drop += [f for f in keep if f is not best]
                 keep = [best]
             db.log(rid, f"保留 {len(keep)} 个视频，丢弃 {len(drop)} 个文件")
-            await self.drive.move([f["id"] for f in keep], await self.dest_dir(r, meta))
+            try:
+                dest = await self.dest_dir(r, meta)
+            except Exception as e:  # noqa
+                raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
+            await self.drive.move([f["id"] for f in keep], dest)
             return True
+        except SetupError:
+            raise
         except Exception as e:  # noqa
             db.log(rid, f"失败，换下一个: {e}")
             return False

@@ -290,6 +290,16 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(match_reason("1917.2019.1080p", ["1917"], "2019", "movie", None), "")
         self.assertEqual(match_reason("完全无关 2024", ["Dune"], "2024", "movie", None), "标题不匹配")
 
+    def test_sequels_and_hdtc(self):
+        from app.filters import match_reason, BAD_TAGS
+        n = ["流浪地球", "The Wandering Earth"]
+        self.assertNotEqual(match_reason("[DBD-Raws][流浪地球2/The Wandering Earth Ⅱ/The Wandering Earth 2][1080P]", n, "2019", "movie", None), "")
+        self.assertNotEqual(match_reason("Iron.Man.2.2010.1080p", ["Iron Man"], "2008", "movie", None), "")
+        self.assertEqual(match_reason("流浪地球.The.Wandering.Earth.2019.1080p.WEB-DL", n, "2019", "movie", None), "")
+        self.assertEqual(match_reason("流浪地球 2019 国语中字 1080p", n, "2019", "movie", None), "")
+        self.assertEqual(match_reason("流浪地球2 2023 1080p", ["流浪地球2"], "2023", "movie", None), "")   # 片名本身带 2 不受影响
+        self.assertTrue(BAD_TAGS.search("流浪地球.2019.1080p.HDTC.X264"))
+
     def test_tv_rules(self):
         from app.filters import match_reason
         n = ["笑傲江湖"]
@@ -380,6 +390,53 @@ class KiteTest(unittest.TestCase):
         self.assertEqual(call[0]["params"], {"name": "magnet_search", "arguments": {"query": "片 2023", "limit": 20}})
         self.assertEqual(call[1]["Authorization"], "Bearer mcp__tok")
         self.assertEqual(call[1]["Mcp-Session-Id"], "S1")             # 沿用服务端给的会话 ID
+
+
+class SetupErrorTest(unittest.TestCase):
+    def _run(self, drive, rid):
+        meta = {"names": ["Dune"], "year": "2024", "episodes": 0}
+        raw = [Candidate("magnet", "Dune.2024.1080p.WEB-DL.%d" % i, "magnet:?xt=urn:btih:%040d" % i, size=2 * GB) for i in range(5)]
+
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        return db.get(rid)
+
+    def test_bad_staging_aborts_without_burning_candidates(self):
+        class D(FakeDrive):
+            async def mkdir(self, parent, name):
+                self.calls = getattr(self, "calls", 0) + 1
+                raise RuntimeError("115 接口失败: 父目录不存在。")
+        d = D()
+        rid = db.create("movie", 960, None, "Dune (2024)")
+        r = self._run(d, rid)
+        self.assertEqual(r["status"], "failed")
+        self.assertIn("重新选择暂存目录", r["error"])
+        self.assertEqual(d.calls, 1)                 # 不再把 8 个候选挨个试一遍
+        self.assertEqual(r["tried"], "[]")           # 候选没有被记为已试，修好目录后可以直接重试
+
+    def test_preflight_catches_unreachable_folder(self):
+        class D(FakeDrive):
+            async def list_dirs(self, cid): raise RuntimeError("父目录不存在")
+        rid = db.create("movie", 961, None, "Dune (2024)")
+        r = self._run(D(), rid)
+        self.assertEqual(r["status"], "failed"); self.assertIn("暂存目录无法访问", r["error"])
+
+    def test_reset_clears_tried(self):
+        rid = db.create("movie", 962, None, "X (2020)")
+        db.update(rid, status="failed", tried='["a","b"]', error="x")
+        self.assertEqual(db.batch([rid], "reset"), [rid])
+        r = db.get(rid)
+        self.assertEqual((r["status"], r["tried"], r["error"]), ("queued", "[]", ""))
+
+    def test_big_folder_id_stays_exact(self):
+        from app import settings
+        from app.config import cfg
+        big = "3312345678901234567"
+        settings.save({"p115_staging_cid": big, "p115_staging_label": "暂存"})
+        self.assertEqual(settings.public()["values"]["p115_staging_cid"], big)   # 以字符串返回，浏览器不会丢精度
+        self.assertEqual(cfg.P115_STAGING_CID, int(big))
 
 
 class ApprovalTest(unittest.TestCase):

@@ -184,10 +184,10 @@ async def batch(request: Request, x_token: str = Header("")):
     admin(request, x_token)
     body = await request.json()
     action = body.get("action")
-    if action not in ("approve", "reject", "retry", "delete"):
+    if action not in ("approve", "reject", "retry", "reset", "delete"):
         raise HTTPException(400, "bad action")
     done = db.batch(body.get("ids", []), action)
-    if action in ("approve", "retry"):
+    if action in ("approve", "retry", "reset"):
         for rid in done:
             spawn(rid)
     return {"done": done}
@@ -352,7 +352,7 @@ def p115_logout(request: Request, x_token: str = Header("")):
 async def p115_folders(request: Request, cid: int = 0, x_token: str = Header("")):
     admin(request, x_token)
     try:
-        return await pipe.drive.list_dirs(cid)
+        return [{"id": str(d["id"]), "name": d["name"]} for d in await pipe.drive.list_dirs(cid)]  # 字符串，避免浏览器丢精度
     except Exception as e:  # noqa
         raise HTTPException(400, str(e))
 

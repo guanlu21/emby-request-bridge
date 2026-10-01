@@ -116,7 +116,7 @@ def promote(media_type, tmdb_id, season):
 def batch(ids, action):
     """approve/reject 只作用于待审批；retry 只作用于失败/已拒绝；delete 作用于非进行中的记录。返回受影响的 id。"""
     rules = {"approve": ("pending", "queued"), "reject": ("pending", "rejected"),
-             "retry": ("failed,rejected", "queued")}
+             "retry": ("failed,rejected", "queued"), "reset": ("failed,rejected", "queued")}
     done = []
     with _lock:
         c = conn()
@@ -133,6 +133,8 @@ def batch(ids, action):
                 if r["status"] not in src.split(","):
                     continue
                 c.execute("UPDATE requests SET status=?, updated=? WHERE id=?", (dst, time.time(), i))
+                if action == "reset":
+                    c.execute("UPDATE requests SET tried='[]', error='' WHERE id=?", (i,))
             done.append(i)
         c.commit()
     return done

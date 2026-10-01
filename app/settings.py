@@ -147,7 +147,8 @@ def set_internal(**kw):
 def public() -> dict:
     """给前端：schema + 当前值；密钥不回传，只告诉有没有配置。"""
     cur = get()
-    values = {k: ("" if k in SECRET else cur[k]) for k in FIELDS}
+    # 115 目录 ID 有 19 位，超出浏览器 JSON 数字的精度（约 16 位），必须以字符串返回
+    values = {k: ("" if k in SECRET else (str(cur[k]) if FIELDS[k]["type"] == "folder" else cur[k])) for k in FIELDS}
     for k, f in FIELDS.items():
         if f["type"] == "folder":
             lk = k.replace("_cid", "_label")

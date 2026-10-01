@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 GB = 1024 ** 3
 VIDEO_EXT = {".mkv", ".mp4", ".ts", ".m2ts", ".avi", ".mov", ".wmv", ".flv", ".rmvb", ".webm"}
-BAD_TAGS = re.compile(r"(?i)(?<![a-z])(cam|hdcam|hdts|telesync|telecine|screener|tc|ts)(?![a-z])|枪版")
+BAD_TAGS = re.compile(r"(?i)(?<![a-z])(cam|hdcam|hdts|hdtc|telesync|telecine|screener|tc|ts)(?![a-z])|枪版")
 CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
@@ -92,6 +92,15 @@ def _years(text: str) -> list[str]:
     return re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", text)
 
 
+def _is_sequel(spaced_title: str, name: str) -> bool:
+    """片名后面紧跟 1-2 位数字或 Ⅱ/Ⅲ，而 TMDB 片名本身不带数字：多半是续集（流浪地球2 ≠ 流浪地球）。年份是 4 位数，不受影响。"""
+    ns = re.sub(r"[\W_]+", " ", name.lower()).strip()
+    i = spaced_title.find(ns) if ns else -1
+    if i < 0 or re.search(r"\d$", ns):
+        return False
+    return bool(re.match(r"\s*(?:\d{1,2}|[ⅱⅲⅳ])(?:\s|$)", spaced_title[i + len(ns):], re.I))
+
+
 def name_hit(result_title: str, names: list[str]) -> bool:
     """名字命中：整名包含，或去掉副标题后包含，或英文名的关键词都出现（不要求相邻、不在乎标点）。"""
     rt = norm(result_title)
@@ -102,10 +111,13 @@ def name_hit(result_title: str, names: list[str]) -> bool:
         head = re.split(r"[:：]", n, maxsplit=1)[0].strip()
         if head and head != n and len(norm(head)) >= 2:
             cands.append(head)
+    spaced = re.sub(r"[\W_]+", " ", result_title.lower()).strip()
     for n in cands:
         k = norm(n)
         if k and k in rt:
-            return True
+            if not _is_sequel(spaced, n):
+                return True
+            continue
         ts = [t for t in re.findall(r"[a-z0-9]+", n.lower()) if t not in STOP]
         if len(ts) >= 2 and all(t in toks for t in ts):
             return True
