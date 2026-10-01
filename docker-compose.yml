@@ -16,7 +16,6 @@ services:
   bridge:
     image: ghcr.io/guanlu21/emby-request-bridge:latest   # 由 GitHub Actions 构建；想本地构建就改成 build: .
     container_name: request-bridge
-    env_file: .env
     ports: ["8686:8686"]
     volumes: ["./data/bridge:/data"]
     depends_on: [prowlarr, pansou]

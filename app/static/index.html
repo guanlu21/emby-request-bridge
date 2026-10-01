@@ -37,7 +37,14 @@ th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-a
 small{color:var(--mut)}details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut);font:12px/1.5 inherit}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}.bar select{width:auto}
 .form{display:grid;gap:14px;max-width:640px}
-.form h3{margin:10px 0 0;font-size:15px}
+.form h3{margin:14px 0 0;font-size:15px;padding-top:12px;border-top:1px solid var(--line)}
+.form h3:first-child{border-top:0;padding-top:0}
+.row>div small{display:block;margin-top:3px}
+#qrbox{background:#fff;padding:12px;border-radius:8px;width:fit-content;margin:10px auto;color:#000}
+#qrbox svg{display:block;width:220px;height:220px}
+#flist{display:grid;gap:4px;max-height:260px;overflow:auto;margin:10px 0}
+#flist .btn{text-align:left}
+code{word-break:break-all}
 .row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .seg button{border:0;background:var(--sf);padding:6px 18px;cursor:pointer}.seg button.on{background:var(--ac);color:var(--acfg)}
@@ -54,6 +61,8 @@ dialog label{display:flex;gap:8px;padding:5px 0}
 <main>
 <section id="v-login" class="login hide">
   <h2>登录求片</h2><small>使用你的 Emby 用户名和密码</small>
+  <div id="lsetup" class="hide" style="display:grid;gap:8px"><input id="eurl" type="text" placeholder="Emby 地址，如 http://192.168.1.10:8096">
+    <small>首次使用：请用 Emby 管理员账号登录，它会成为本站管理员。</small></div>
   <input id="u" type="text" placeholder="用户名" autocomplete="username">
   <input id="p" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key=='Enter')login()">
   <div class="err" id="lerr"></div>
@@ -79,25 +88,16 @@ dialog label{display:flex;gap:8px;padding:5px 0}
   <div class="wrap"><table><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 
-<section id="v-set" class="hide"><div class="form">
-  <h3>代理</h3>
-  <div class="row"><span>启用代理</span><div class="seg" id="s-proxy"><button data-v="1">开启</button><button data-v="0">关闭</button></div></div>
-  <div class="row"><span>代理地址</span><input id="s-purl" type="text" placeholder="http://192.168.1.10:7891"></div>
-  <div class="row"><span>代理用户名</span><input id="s-puser" type="text" placeholder="可选"></div>
-  <div class="row"><span>代理密码</span><input id="s-ppass" type="password" placeholder="可选；留空不修改"></div>
-  <small>代理地址不要写 127.0.0.1：容器里的 127.0.0.1 指向容器自己，请写 NAS 的局域网 IP。</small>
-  <h3>TMDB</h3>
-  <div class="row"><span>API Key</span><input id="s-key" type="password"></div>
-  <div class="row"><span>语言（影响搜索和命名）</span><select id="s-lang"><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></div>
-  <div class="row"><span>API 主机名</span><input id="s-api" type="text"></div>
-  <div class="row"><span>图片主机名</span><input id="s-img" type="text"></div>
-  <div style="display:flex;gap:8px;align-items:center"><button class="btn pri" onclick="saveSet()">保存设置</button>
-    <button class="btn" onclick="testSet()">测试连通性</button><small id="tres"></small></div>
-</div></section>
+<section id="v-set" class="hide"><div class="form" id="setform"></div></section>
 </main>
 
 <dialog id="dlg"><h3 id="dt" style="margin-top:0"></h3><div id="dseasons"></div>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="dlg.close()">取消</button><button class="btn pri" id="dok">确认求片</button></div></dialog>
+<dialog id="qdlg"><h3 style="margin-top:0">扫码授权 115</h3><div id="qrbox"></div>
+  <small id="qst">请用 115 手机 App 扫码并确认</small>
+  <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="QPOLL=false;$('qdlg').close()">关闭</button></div></dialog>
+<dialog id="fdlg"><h3 style="margin-top:0">选择 115 目录</h3><small id="fpath"></small><div id="flist"></div>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="fup()">上一级</button><button class="btn" onclick="$('fdlg').close()">取消</button><button class="btn pri" onclick="fchoose()">选择当前目录</button></div></dialog>
 <div id="toast" role="status"></div>
 
 <script>
@@ -124,7 +124,10 @@ function view(v){
   if(v=='set')loadSet();
   if(v=='search')$('q').focus();
 }
-function showLogin(){me=null;$('hd').classList.add('hide');view('login')}
+async function showLogin(){
+  me=null;$('hd').classList.add('hide');view('login');
+  try{const s=await (await fetch('/api/status')).json();$('lsetup').classList.toggle('hide',s.configured)}catch(e){}
+}
 async function start(){
   try{me=await api('/api/me')}catch(e){return showLogin()}
   $('hd').classList.remove('hide');$('who').textContent=me.name+(me.admin?'（管理员）':'');
@@ -134,7 +137,7 @@ async function start(){
 }
 async function login(){
   $('lerr').textContent='';
-  try{await api('/api/login',{method:'POST',body:{username:$('u').value,password:$('p').value}});$('p').value='';start()}
+  try{await api('/api/login',{method:'POST',body:{username:$('u').value,password:$('p').value,emby_url:$('eurl').value}});$('p').value='';start()}
   catch(e){$('lerr').textContent=e.message}
 }
 async function logout(){await api('/api/logout',{method:'POST'});showLogin()}
@@ -212,22 +215,87 @@ async function batch(action){
   toast(`已处理 ${r.done.length} 条`);sel.clear();$('all').checked=false;loadAdmin();
 }
 
-/* ---- 设置 ---- */
-function setProxy(on){proxyOn=on;document.querySelectorAll('#s-proxy button').forEach(b=>b.classList.toggle('on',(b.dataset.v=='1')==on))}
-document.querySelectorAll('#s-proxy button').forEach(b=>b.onclick=()=>setProxy(b.dataset.v=='1'));
-async function loadSet(){
-  const s=await api('/api/settings');setProxy(s.proxy_enabled);
-  $('s-purl').value=s.proxy_url;$('s-puser').value=s.proxy_user;$('s-lang').value=s.language;$('s-api').value=s.api_host;$('s-img').value=s.image_host;
-  $('s-ppass').value='';$('s-key').value='';$('s-key').placeholder=s.has_tmdb_key?'已配置；留空不修改':'粘贴 TMDB API Key';$('tres').textContent='';
+/* ---- 设置（按后端 schema 渲染） ---- */
+let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false;
+function fieldHtml(f,d){
+  const v=d.values[f.key],id='f_'+f.key;let inp='';
+  if(f.type=='toggle')inp=`<div class="seg" id="${id}"><button data-v="1" class="${v?'on':''}" onclick="segSet(this)">开启</button><button data-v="0" class="${v?'':'on'}" onclick="segSet(this)">关闭</button></div>`;
+  else if(f.type=='select')inp=`<select id="${id}">${f.options.map(([k,n])=>`<option value="${esc(k)}" ${k==v?'selected':''}>${esc(n)}</option>`).join('')}</select>`;
+  else if(f.type=='folder'){const lb=d.values[f.key.replace('_cid','_label')];FOLDER[f.key]={cid:v||0,label:lb||''};
+    inp=`<div style="display:flex;gap:8px"><input id="${id}" type="text" readonly placeholder="未选择" value="${esc(lb||(v?'目录 '+v:''))}"><button class="btn" onclick="pickFolder('${f.key}')">选择</button></div>`}
+  else if(f.type=='password')inp=`<input id="${id}" type="password" autocomplete="new-password" placeholder="${d.secret_set[f.key]?'已配置；留空不修改':''}">`;
+  else inp=`<input id="${id}" type="${f.type=='number'?'number':'text'}" ${f.type=='number'?'step="any"':''} value="${esc(v)}">`;
+  return `<div class="row"><span>${esc(f.label)}</span><div>${inp}${f.help?`<small>${esc(f.help)}</small>`:''}</div></div>`;
 }
-async function saveSet(){
-  try{await api('/api/settings',{method:'PUT',body:{proxy_enabled:proxyOn,proxy_url:$('s-purl').value,proxy_user:$('s-puser').value,
-    proxy_pass:$('s-ppass').value,tmdb_key:$('s-key').value,language:$('s-lang').value,api_host:$('s-api').value,image_host:$('s-img').value}});
-    toast('设置已保存');loadSet()}catch(e){toast(e.message)}
+function segSet(b){b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x==b))}
+async function loadSet(){
+  const d=await api('/api/settings');SET=d;FOLDER={};let h='';
+  for(const g of d.schema){
+    h+=`<h3>${esc(g.group)}</h3>`+g.fields.map(f=>fieldHtml(f,d)).join('');
+    if(g.group=='115 网盘')h+=`<div class="row"><span>115 授权</span><div><span id="p115st">检查中…</span> <button class="btn" onclick="p115Auth()">扫码授权</button> <button class="btn" onclick="p115Out()">取消授权</button><small>先填 AppID 再授权；授权后服务会自动续期，不用再管。</small></div></div>`;
+  }
+  h+=`<h3>API 令牌</h3><div class="row"><span>脚本 / emby-manager 用</span><div><button class="btn" onclick="showTok()">显示令牌</button> <button class="btn" onclick="resetTok()">重新生成</button><small><code id="tokv"></code></small></div></div>`;
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn pri" onclick="saveSet()">保存设置</button><button class="btn" onclick="testSet()">测试 TMDB</button><button class="btn" onclick="testLp()">测试 LitePan</button><small id="tres"></small></div>`;
+  $('setform').innerHTML=h;p115Refresh();
+}
+function collect(){
+  const o={};
+  for(const g of SET.schema)for(const f of g.fields){
+    const el=$('f_'+f.key);
+    if(f.type=='toggle')o[f.key]=el.querySelector('.on')?.dataset.v=='1';
+    else if(f.type=='folder'){o[f.key]=FOLDER[f.key].cid;o[f.key.replace('_cid','_label')]=FOLDER[f.key].label}
+    else o[f.key]=el.value;
+  }
+  return o;
+}
+async function saveSet(silent){
+  try{await api('/api/settings',{method:'PUT',body:collect()});if(!silent){toast('设置已保存');loadSet()}}catch(e){toast(e.message)}
 }
 async function testSet(){
-  $('tres').textContent='测试中…';const r=await api('/api/settings/test',{method:'POST'});
-  $('tres').textContent=r.ok?`连接正常（${r.ms} ms）`:'失败：'+r.error;
+  await saveSet(true);$('tres').textContent='测试中…';
+  try{const r=await api('/api/settings/test',{method:'POST'});$('tres').textContent=r.ok?`连接正常（${r.ms} ms）`:'失败：'+r.error}catch(e){$('tres').textContent=e.message}
 }
+async function testLp(){
+  await saveSet(true);$('tres').textContent='测试中…';
+  try{const r=await api('/api/settings/litepan/test',{method:'POST'});$('tres').textContent=(r.ok?'LitePan 连接正常：':'失败：')+r.info}catch(e){$('tres').textContent=e.message}
+}
+async function showTok(){$('tokv').textContent=(await api('/api/settings/token')).token}
+async function resetTok(){
+  if(!confirm('重新生成后，所有人需要重新登录，使用旧令牌的脚本也要更新。继续？'))return;
+  await api('/api/settings/token/reset',{method:'POST'});toast('已重新生成，请重新登录');showLogin();
+}
+/* 115 目录选择 */
+async function pickFolder(key){FKEY=key;FSTACK=[{id:0,name:'根目录'}];$('fdlg').showModal();await fload()}
+async function fload(){
+  const cur=FSTACK[FSTACK.length-1];$('fpath').textContent=FSTACK.map(x=>x.name).join(' / ');$('flist').textContent='加载中…';
+  try{FLIST=await api('/api/p115/folders?cid='+cur.id);
+    $('flist').innerHTML=FLIST.length?FLIST.map((x,i)=>`<button class="btn" onclick="fenter(${i})">${esc(x.name)}</button>`).join(''):'<small>这里没有子目录</small>'}
+  catch(e){$('flist').textContent=e.message}
+}
+function fenter(i){FSTACK.push(FLIST[i]);fload()}
+function fup(){if(FSTACK.length>1){FSTACK.pop();fload()}}
+function fchoose(){
+  const cur=FSTACK[FSTACK.length-1],label=FSTACK.slice(1).map(x=>x.name).join('/')||'根目录';
+  FOLDER[FKEY]={cid:cur.id,label};$('f_'+FKEY).value=label;$('fdlg').close();
+}
+/* 115 扫码授权 */
+async function p115Refresh(){try{const s=await api('/api/p115/status');$('p115st').textContent=s.authorized?'已授权':'未授权'}catch(e){}}
+async function p115Auth(){
+  await saveSet(true);
+  try{
+    const r=await api('/api/p115/auth/start',{method:'POST'});
+    $('qrbox').innerHTML=r.svg||`<code>${esc(r.qrcode)}</code>`;$('qst').textContent='请用 115 手机 App 扫码并确认';$('qdlg').showModal();pollAuth();
+  }catch(e){toast(e.message)}
+}
+async function pollAuth(){
+  QPOLL=true;
+  while(QPOLL){
+    try{const r=await api('/api/p115/auth/poll');
+      if(r.done){QPOLL=false;$('qdlg').close();toast('115 授权成功');p115Refresh();return}
+      $('qst').textContent=r.status==1?'已扫码，请在手机上确认':'请用 115 手机 App 扫码并确认';
+    }catch(e){QPOLL=false;$('qst').textContent=e.message;return}
+  }
+}
+async function p115Out(){if(confirm('取消后将无法使用 115，需要重新扫码授权。继续？')){await api('/api/p115/logout',{method:'POST'});p115Refresh()}}
 start();
 </script></body></html>

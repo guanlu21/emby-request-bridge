@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 
-os.environ["DB_PATH"] = tempfile.mktemp(suffix=".db")
+os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "bridge.db")
 os.environ["P115_STAGING_CID"] = "1"
 os.environ["P115_DEST_MOVIE_CID"] = "2"
 os.environ["LITEPAN_WAIT_SECONDS"] = "0"
@@ -147,9 +147,35 @@ class SettingsAuthTest(unittest.TestCase):
         settings.save({"tmdb_key": "", "proxy_pass": ""})           # 留空 = 不修改
         self.assertEqual(settings.get()["tmdb_key"], "K1")
         pub = settings.public()
-        self.assertNotIn("tmdb_key", pub); self.assertTrue(pub["has_tmdb_key"]); self.assertNotIn("proxy_pass", pub)
+        self.assertNotIn("K1", str(pub)); self.assertTrue(pub["secret_set"]["tmdb_key"])   # 密钥不回传
+        self.assertEqual(pub["values"]["tmdb_key"], "")
         settings.save({"proxy_enabled": False})
         self.assertIsNone(settings.proxy())
+
+    def test_folder_number_and_admins(self):
+        from app import settings
+        settings.save({"p115_dest_movie_cid": "12345", "p115_dest_movie_label": "影视/电影", "max_gb": "3", "quota_weekly": "2",
+                       "emby_url": "http://192.168.1.10:8096/"})
+        s = settings.get()
+        self.assertEqual((s["p115_dest_movie_cid"], s["p115_dest_movie_label"]), (12345, "影视/电影"))
+        self.assertEqual((s["max_gb"], s["quota_weekly"]), (3, 2))
+        self.assertEqual(s["emby_url"], "http://192.168.1.10:8096")              # 去掉结尾斜杠
+        from app.config import cfg
+        self.assertEqual(cfg.P115_DEST_MOVIE_CID, 12345)                          # cfg 读到网页设置
+        settings.set_internal(admins="Alice, bob")
+        self.assertEqual(settings.admins(), {"alice", "bob"})
+
+    def test_token_autogen(self):
+        from app import settings
+        self.assertTrue(len(settings.get()["token"]) >= 16)
+
+    def test_private_host(self):
+        from app.auth import is_private_host, normalize_url
+        self.assertEqual(normalize_url("192.168.1.10:8096/"), "http://192.168.1.10:8096")
+        for u in ("http://192.168.1.10:8096", "http://10.0.0.2", "http://localhost:8096", "http://emby:8096", "http://nas.local"):
+            self.assertTrue(is_private_host(u), u)
+        for u in ("http://example.com", "https://emby.mydomain.net:8920", "http://8.8.8.8"):
+            self.assertFalse(is_private_host(u), u)
 
     def test_session_token(self):
         from app import auth
@@ -157,6 +183,66 @@ class SettingsAuthTest(unittest.TestCase):
         self.assertEqual(auth.verify(tok)["name"], "bob")
         self.assertIsNone(auth.verify(tok[:-2] + "xx"))              # 篡改签名
         self.assertIsNone(auth.verify(auth.make({"name": "x"}, ttl=-1)))  # 过期
+
+
+class LitePanTest(unittest.TestCase):
+    def _fake_httpx(self, calls, status=200):
+        class Resp:
+            status_code, text = status, "ok"
+        class Client:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, url, json=None, headers=None):
+                calls.append((url, json, headers)); return Resp()
+        from app import litepan
+        litepan.httpx = type("H", (), {"AsyncClient": Client})
+
+    def test_send_format(self):
+        from app import litepan
+        from app.config import cfg
+        calls = []
+        self._fake_httpx(calls)
+        cfg.LITEPAN_URL, cfg.LITEPAN_KEY = "http://192.168.1.10:5211/", "lpk_api_abc"
+        cfg.LITEPAN_EVENT, cfg.LITEPAN_SOURCE = "download_completed", "RequestBridge"
+        ok, _ = asyncio.run(litepan.send("download_completed"))
+        url, body, hdr = calls[0]
+        self.assertTrue(ok)
+        self.assertEqual(url, "http://192.168.1.10:5211/api/open/automation/events")
+        self.assertEqual(hdr["Authorization"], "Bearer lpk_api_abc")
+        self.assertEqual(body["event"], "download_completed")
+        self.assertEqual(body["source"], "RequestBridge")
+        cfg.LITEPAN_SOURCE = ""
+        asyncio.run(litepan.send("x"))
+        self.assertNotIn("source", calls[1][1])            # 来源留空则不带
+
+    def test_bad_key_message(self):
+        from app import litepan
+        from app.config import cfg
+        self._fake_httpx([], status=401)
+        cfg.LITEPAN_URL, cfg.LITEPAN_KEY = "http://x:5211", "k"
+        ok, info = asyncio.run(litepan.send("e"))
+        self.assertFalse(ok); self.assertIn("任务执行", info)
+
+    def test_debounce_merges_requests(self):
+        from app import litepan
+        from app.config import cfg
+        calls = []
+        self._fake_httpx(calls)
+        cfg.LITEPAN_URL, cfg.LITEPAN_KEY, cfg.LITEPAN_DELAY = "http://x:5211", "k", 0.05
+        cfg.LITEPAN_SOURCE = "RequestBridge"
+        a = db.create("movie", 801, None, "A (2020)")
+        b = db.create("movie", 802, None, "B (2021)")
+
+        async def go():
+            litepan.schedule(a)
+            await asyncio.sleep(0.02)
+            litepan.schedule(b)            # 窗口内再来一个：合并
+            await asyncio.sleep(0.25)
+        asyncio.run(go())
+        self.assertEqual(len(calls), 1)
+        self.assertIn("已通知 LitePan", db.get(a)["log"])
+        self.assertIn("已通知 LitePan", db.get(b)["log"])
 
 
 class ApprovalTest(unittest.TestCase):
@@ -202,6 +288,36 @@ class UserLinkTest(unittest.TestCase):
         self.assertFalse(ok); self.assertIn("没有该用户", why)
         cfg.EMBY_URL = ""
         self.assertEqual(run(emby.check("anyone")), (True, "", ""))  # Emby 没配则放行
+
+
+class OpenDriveTest(unittest.TestCase):
+    def test_share_skipped_without_cookie(self):
+        from app.config import cfg
+        from app.drive115 import CompositeDrive
+        cfg.P115_COOKIE = ""
+        d = CompositeDrive()
+        self.assertFalse(d.can_receive_share())
+        with self.assertRaises(RuntimeError):
+            asyncio.run(d.receive_share("abc", "x", 1))
+
+    def test_pipeline_skips_shares_and_uses_magnet(self):
+        from app.config import cfg
+        cfg.P115_COOKIE = ""
+        meta = {"names": ["Dune: Part Two"], "year": "2024", "episodes": 0}
+        raw = [Candidate("share", "Dune Part Two 2024 1080p 中字", "https://115.com/s/abc?password=x"),
+               Candidate("magnet", "Dune.Part.Two.2024.1080p.WEB-DL", "magnet:?xt=urn:btih:b", size=2 * GB, seeders=5)]
+
+        class D(FakeDrive):
+            def can_receive_share(self): return False
+        drive = D()
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        rid = db.create("movie", 777, None, "Dune: Part Two (2024)")
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual(r["status"], "done")
+        self.assertIn("跳过 1 个分享链接", r["log"])
 
 
 class PipelineTest(unittest.TestCase):

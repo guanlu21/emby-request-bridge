@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,9 +9,8 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
-from . import auth as auth_mod, db, emby, settings, tmdb
+from . import auth as auth_mod, db, drive115, emby, litepan, settings, tmdb
 from .config import cfg
-from .drive115 import LazyDrive
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
 
@@ -38,7 +38,7 @@ def spawn(rid):
 @asynccontextmanager
 async def lifespan(app):
     global pipe
-    pipe = Pipeline(LazyDrive(cfg.P115_COOKIE), _meta, search_all, notify_after)
+    pipe = Pipeline(drive115.CompositeDrive(), _meta, search_all, notify_after)
     for rid in db.unfinished():  # 重启后继续未完成的请求
         spawn(rid)
     yield
@@ -54,7 +54,7 @@ def who(request: Request, x_token: str = "") -> dict:
     u = auth_mod.verify(request.cookies.get("rb_session", ""))
     if not u:
         raise HTTPException(401, "请先登录")
-    return u
+    return {**u, "admin": u["name"].lower() in settings.admins()}
 
 
 def admin(request: Request, x_token: str = "") -> dict:
@@ -65,6 +65,12 @@ def admin(request: Request, x_token: str = "") -> dict:
 
 
 # ---------- 登录 ----------
+@app.get("/api/status")
+def status():
+    """登录页用：Emby 地址是否已配置、是否已有管理员。"""
+    return {"configured": bool(cfg.EMBY_URL), "initialized": bool(settings.admins())}
+
+
 @app.post("/api/login")
 async def login(request: Request, response: Response):
     b = await request.json()
@@ -74,13 +80,30 @@ async def login(request: Request, response: Response):
     if len(recent) >= 5:
         raise HTTPException(429, "尝试次数太多，请 10 分钟后再试")
     try:
-        u = await auth_mod.emby_login(name, pw)
+        if not cfg.EMBY_URL:  # 首次设置：登录的同时填 Emby 地址
+            url = auth_mod.normalize_url(b.get("emby_url", ""))
+            if not url:
+                raise auth_mod.AuthError("请填写 Emby 地址")
+            if not auth_mod.is_private_host(url):
+                raise auth_mod.AuthError("首次设置请填局域网地址（如 http://192.168.1.10:8096），之后可在设置里改成域名")
+            u = await auth_mod.emby_login(name, pw, base=url, setup=True)
+            if not u["emby_admin"]:
+                raise auth_mod.AuthError("首次设置请用 Emby 管理员账号登录")
+            settings.save({"emby_url": url, "emby_key": u["api_key"]})
+            settings.set_internal(admins=u["name"])
+        else:
+            u = await auth_mod.emby_login(name, pw)
+            if not settings.admins():  # 已有 Emby 地址但还没有管理员（比如用环境变量配置的）
+                if not u["emby_admin"]:
+                    raise auth_mod.AuthError("系统还没初始化，请先让 Emby 管理员登录一次")
+                settings.set_internal(admins=u["name"])
     except auth_mod.AuthError as e:
         _fails[key] = recent + [time.time()]
         raise HTTPException(401, str(e))
     _fails.pop(key, None)
-    response.set_cookie("rb_session", auth_mod.make(u), max_age=7 * 86400, httponly=True, samesite="lax")
-    return {"name": u["name"], "admin": u["admin"]}
+    response.set_cookie("rb_session", auth_mod.make({"uid": u["uid"], "name": u["name"]}), max_age=7 * 86400,
+                        httponly=True, samesite="lax")
+    return {"name": u["name"], "admin": u["name"].lower() in settings.admins()}
 
 
 @app.post("/api/logout")
@@ -224,6 +247,82 @@ async def put_settings(request: Request, x_token: str = Header("")):
 async def test_settings(request: Request, x_token: str = Header("")):
     admin(request, x_token)
     return await tmdb.test()
+
+
+@app.post("/api/settings/litepan/test")
+async def test_litepan(request: Request, x_token: str = Header("")):
+    """发一条名为 bridge_test 的通知：验证地址和秘钥。联动里没有这个名称，所以不会真的执行任何任务。"""
+    admin(request, x_token)
+    ok, info = await litepan.send("bridge_test", "RequestBridge 连接测试")
+    return {"ok": ok, "info": info}
+
+
+@app.get("/api/settings/token")
+def get_token(request: Request, x_token: str = Header("")):
+    """API 令牌：给脚本或 emby-manager 调用管理接口用（X-Token 请求头）。"""
+    admin(request, x_token)
+    return {"token": cfg.TOKEN}
+
+
+@app.post("/api/settings/token/reset")
+def reset_token(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    settings.set_internal(token=secrets.token_urlsafe(24))
+    return {"token": cfg.TOKEN}  # 旧的登录会话会一并失效
+
+
+# ---------- 115 开放平台授权 / 目录选择 ----------
+def _qr_svg(text: str) -> str:
+    try:
+        import io
+        import qrcode
+        import qrcode.image.svg
+        buf = io.BytesIO()
+        qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=8).save(buf)
+        return buf.getvalue().decode()
+    except Exception:  # noqa
+        return ""
+
+
+@app.get("/api/p115/status")
+def p115_status(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return drive115.auth_status()
+
+
+@app.post("/api/p115/auth/start")
+async def p115_start(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    try:
+        r = await drive115.auth_start(cfg.P115_APP_ID)
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
+    return {"qrcode": r["qrcode"], "svg": _qr_svg(r["qrcode"])}
+
+
+@app.get("/api/p115/auth/poll")
+async def p115_poll(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    try:
+        return await drive115.auth_poll()
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/p115/logout")
+def p115_logout(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    drive115.auth_clear()
+    return {"ok": True}
+
+
+@app.get("/api/p115/folders")
+async def p115_folders(request: Request, cid: int = 0, x_token: str = Header("")):
+    admin(request, x_token)
+    try:
+        return await pipe.drive.list_dirs(cid)
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
 
 
 # ---------- 海报代理（浏览器不用直连 TMDB，走上面配置的代理） ----------

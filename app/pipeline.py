@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from . import db
+from . import db, litepan
 from .config import cfg
 from .filters import Rules, pick_best_file, select_files
 from .sources import build_candidates, parse_115_share
@@ -24,12 +24,19 @@ class Pipeline:
     async def run(self, rid: int):
         r = db.get(rid)
         try:
+            if not cfg.P115_STAGING_CID or not (cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID):
+                raise RuntimeError("还没有设置 115 的暂存目录和电影/剧集目录，请管理员到「设置」里选择")
             db.update(rid, status="searching", error="")
             meta = await self.meta_fn(r)
             raw = await self.search_fn(meta, r["media_type"], r["season"])
             tried = set(json.loads(r["tried"]))
             cands = [c for c in build_candidates(raw, meta, r["media_type"], r["season"], rules())
                      if c.url not in tried]
+            if not getattr(self.drive, "can_receive_share", lambda: True)():
+                n = len(cands)
+                cands = [c for c in cands if c.kind != "share"]
+                if n != len(cands):
+                    db.log(rid, f"未配置 115 Cookie，跳过 {n - len(cands)} 个分享链接，只用磁力")
             db.log(rid, f"搜到 {len(raw)} 条，过滤后 {len(cands)} 个候选")
             db.update(rid, status="downloading")
             for n, c in enumerate(cands[:cfg.MAX_ATTEMPTS], 1):
@@ -92,17 +99,17 @@ class Pipeline:
 
 
 async def notify_after(r):
-    """等 LitePan 生成 strm，再让 Emby 刷新媒体库。"""
-    async with httpx.AsyncClient(timeout=20) as c:
-        if cfg.LITEPAN_TRIGGER_URL:
-            try:
-                await c.post(cfg.LITEPAN_TRIGGER_URL)
-            except Exception as e:  # noqa
-                db.log(r["id"], f"触发 LitePan 失败: {e}")
-        await asyncio.sleep(cfg.LITEPAN_WAIT)
-        if cfg.EMBY_URL and cfg.EMBY_KEY:
-            try:
+    """入库通知：配了 LitePan 就触发它的自动联动（整理 → STRM → Emby 刷库）；
+    没配就等一会儿，由本服务直接让 Emby 刷新媒体库。"""
+    if litepan.configured():
+        litepan.schedule(r["id"])
+        db.log(r["id"], f"已排队通知 LitePan（{cfg.LITEPAN_DELAY} 秒内的多个请求合并成一次）")
+        return
+    await asyncio.sleep(cfg.LITEPAN_WAIT)
+    if cfg.EMBY_URL and cfg.EMBY_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
                 await c.post(f"{cfg.EMBY_URL}/emby/Library/Refresh", params={"api_key": cfg.EMBY_KEY})
-                db.log(r["id"], "已通知 Emby 刷新媒体库")
-            except Exception as e:  # noqa
-                db.log(r["id"], f"通知 Emby 失败: {e}")
+            db.log(r["id"], "已通知 Emby 刷新媒体库")
+        except Exception as e:  # noqa
+            db.log(r["id"], f"通知 Emby 失败: {e}")
