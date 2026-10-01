@@ -152,6 +152,8 @@ class Pipeline:
             return True
         except SetupError:
             raise
+        except AttributeError as e:  # 方法不存在：是程序和 115 库版本不匹配，换资源也没用
+            raise SetupError(f"程序与 115 客户端库版本不匹配：{e}")
         except Exception as e:  # noqa
             db.log(rid, f"失败，换下一个: {e}")
             return False

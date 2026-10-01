@@ -51,6 +51,7 @@ SCHEMA = [
         F("prefer_min_gb", "偏好区间下限（GB）", "number", "落在偏好区间内的排名更靠前", default=1),
         F("prefer_max_gb", "偏好区间上限（GB）", "number", default=3),
         F("max_attempts", "每个请求最多尝试几个资源", "number", default=8),
+        F("offline_timeout", "单个资源离线等待上限（秒）", "number", "磁力在 115 上一直下不完（死种）时，等这么久就换下一个；热门资源通常几分钟内完成", default=600),
     ]},
     {"group": "代理与 TMDB", "fields": [
         F("proxy_enabled", "启用代理", "toggle", default=False),

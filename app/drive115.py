@@ -42,53 +42,77 @@ def _ids(ids):
     return {f"fid[{i}]": x for i, x in enumerate(ids)}
 
 
+ADD_OFFLINE = ("clouddownload_task_add_url", "offline_add_url")           # p115client 新旧版本的方法名不同
+LIST_OFFLINE = ("clouddownload_task_list", "clouddownload_task_lists", "offline_list")
+
+
 class P115Drive:
+    """Cookie + p115client。方法名随库版本变化，所以统一用 _method 按候选名查找，找不到时把库里相关的方法名列出来。"""
+
     def __init__(self, cookie: str):
         from p115client import P115Client
         self.c = P115Client(cookie)
+        self._dest: dict = {}
 
-    async def _run(self, fn, *a, **kw):
+    def _method(self, *names):
+        for n in names:
+            fn = getattr(self.c, n, None)
+            if fn:
+                return fn
+        have = sorted(n for n in dir(self.c) if not n.startswith("_") and any(k in n for k in ("offline", "clouddownload", "share", "fs_")))
+        raise AttributeError(f"p115client 里没有 {' / '.join(names)}；库里相关的方法有：{', '.join(have[:30])}")
+
+    async def _call(self, names, *a, **kw):
+        fn = self._method(*([names] if isinstance(names, str) else names))
         return _check(await asyncio.to_thread(fn, *a, **kw))
 
     async def _children(self, cid: int) -> list[dict]:
-        r = await self._run(self.c.fs_files, {"cid": cid, "limit": 1000, "show_dir": 1})
+        r = await self._call("fs_files", {"cid": cid, "limit": 1000, "show_dir": 1})
         return r.get("data", [])
 
     async def list_dirs(self, cid: int) -> list[dict]:
         return [{"id": int(it["cid"]), "name": it.get("n", "")} for it in await self._children(cid) if "fid" not in it]
 
     async def mkdir(self, parent: int, name: str) -> int:
-        r = await self._run(self.c.fs_mkdir, {"cname": name, "pid": parent})
+        r = await self._call("fs_mkdir", {"cname": name, "pid": parent})
         return int(r.get("cid") or r["data"]["file_id"])
 
     async def ensure_dir(self, parent: int, name: str) -> int:
-        for it in await self._children(parent):
-            if "fid" not in it and it.get("n") == name:
-                return int(it["cid"])
+        for it in await self.list_dirs(parent):
+            if it["name"] == name:
+                return it["id"]
         return await self.mkdir(parent, name)
 
     async def receive_share(self, share_code, receive_code, dest):
-        snap = await self._run(self.c.share_snap, {"share_code": share_code, "receive_code": receive_code,
-                                                   "cid": 0, "limit": 1000})
+        snap = await self._call("share_snap", {"share_code": share_code, "receive_code": receive_code, "cid": 0, "limit": 1000})
         items = snap.get("data", {}).get("list", [])
         ids = [str(it.get("fid") or it.get("cid")) for it in items]
         if not ids:
             raise RuntimeError("分享为空或已失效")
-        await self._run(self.c.share_receive, {"share_code": share_code, "receive_code": receive_code,
-                                               "file_id": ",".join(ids), "cid": dest})
+        await self._call("share_receive", {"share_code": share_code, "receive_code": receive_code,
+                                           "file_id": ",".join(ids), "cid": dest})
 
     async def add_offline(self, magnet: str, dest: int) -> str:
-        r = await self._run(self.c.offline_add_url, {"url": magnet, "wp_path_id": dest})
-        h = r.get("info_hash") or (re.search(r"btih:([0-9a-fA-F]{40})", magnet) or [None, ""])[1]
-        return h.lower()
+        r = await self._call(ADD_OFFLINE, {"url": magnet, "wp_path_id": dest})
+        h = (r.get("info_hash") or (re.search(r"btih:([0-9a-zA-Z]{32,40})", magnet) or [None, ""])[1]).lower()
+        self._dest[h] = dest
+        return h
 
     async def offline_state(self, info_hash: str) -> str:
-        r = await self._run(self.c.offline_list, {"page": 1})
-        for t in r.get("tasks", []):
-            if str(t.get("info_hash", "")).lower() == info_hash:
-                if t.get("status") == 2 or t.get("percentDone") == 100:
-                    return "done"
-                return "failed" if t.get("status") == -1 else "running"
+        """优先查任务列表；库里没有列表接口、或列表里找不到该任务时，看目标目录里有没有文件出现（115 离线完成才会落文件）。"""
+        try:
+            r = await self._call(LIST_OFFLINE, {"page": 1})
+            tasks = r.get("tasks") or (r.get("data") or {}).get("tasks") or []
+            for t in tasks:
+                if str(t.get("info_hash", "")).lower() == info_hash:
+                    if t.get("status") == 2 or t.get("percentDone") == 100:
+                        return "done"
+                    return "failed" if t.get("status") == -1 else "running"
+        except AttributeError:
+            pass
+        dest = self._dest.get(info_hash)
+        if dest is not None and await self.list_files(dest):
+            return "done"
         return "running"
 
     async def list_files(self, cid: int) -> list[dict]:
@@ -101,10 +125,10 @@ class P115Drive:
         return out
 
     async def move(self, ids, dest):
-        await self._run(self.c.fs_move, {"pid": dest, **_ids(ids)})
+        await self._call("fs_move", {"pid": dest, **_ids(ids)})
 
     async def delete(self, ids):
-        await self._run(self.c.fs_delete, _ids(ids))
+        await self._call("fs_delete", _ids(ids))
 
 
 # ---------------------------------------------------------------- 开放平台
@@ -143,12 +167,14 @@ async def auth_poll() -> dict:
     try:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(QR_STATUS, params={k: _pending[k] for k in ("uid", "time", "sign")})
-        st = (r.json().get("data") or {}).get("status", 0)
+        j = r.json()
     except httpx.TimeoutException:
         return {"status": 0, "done": False}
-    if st is not None and st < 0:
+    data = j.get("data") or {}
+    if j.get("state") == 0 and not data:  # 官方文档：state=0 表示二维码无效，结束轮询
         _pending.clear()
         raise RuntimeError("二维码已过期或已取消，请重新授权")
+    st = data.get("status", 0)
     if st != 2:
         return {"status": st, "done": False}
     async with httpx.AsyncClient(timeout=20) as c:

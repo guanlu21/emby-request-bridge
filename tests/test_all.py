@@ -439,6 +439,67 @@ class SetupErrorTest(unittest.TestCase):
         self.assertEqual(cfg.P115_STAGING_CID, int(big))
 
 
+class P115AdapterTest(unittest.TestCase):
+    def _drive(self, client):
+        from app.drive115 import P115Drive
+        d = P115Drive.__new__(P115Drive)       # 绕开真实的 p115client
+        d.c, d._dest = client, {}
+        return d
+
+    def test_new_method_names_and_folder_polling(self):
+        calls = []
+
+        class NewClient:   # 只有新版方法名，没有任务列表接口
+            def clouddownload_task_add_url(self, payload): calls.append(payload); return {"state": True}
+            def fs_files(self, payload):
+                return {"state": True, "data": self.files}
+            files = []
+        c = NewClient()
+        d = self._drive(c)
+        mag = "magnet:?xt=urn:btih:" + "a" * 40
+        h = asyncio.run(d.add_offline(mag, 123))
+        self.assertEqual(h, "a" * 40)
+        self.assertEqual(calls[0], {"url": mag, "wp_path_id": 123})
+        self.assertEqual(asyncio.run(d.offline_state(h)), "running")        # 目录里还没文件
+        c.files = [{"fid": "9", "n": "a.mkv", "s": 2 * GB}]
+        self.assertEqual(asyncio.run(d.offline_state(h)), "done")           # 出现文件 = 离线完成
+
+    def test_task_list_api_used_when_present(self):
+        class C:
+            def clouddownload_task_add_url(self, payload): return {"state": True, "info_hash": "ABC"}
+            def clouddownload_task_list(self, payload):
+                return {"state": True, "tasks": [{"info_hash": "abc", "status": -1}]}
+        d = self._drive(C())
+        h = asyncio.run(d.add_offline("magnet:?xt=urn:btih:" + "b" * 40, 1))
+        self.assertEqual(h, "abc")
+        self.assertEqual(asyncio.run(d.offline_state(h)), "failed")
+
+    def test_missing_method_message_lists_available(self):
+        class C:
+            def clouddownload_foo(self): pass
+        d = self._drive(C())
+        with self.assertRaises(AttributeError) as cm:
+            asyncio.run(d.add_offline("magnet:?xt=urn:btih:" + "c" * 40, 1))
+        self.assertIn("clouddownload_foo", str(cm.exception))
+
+    def test_attribute_error_aborts_without_burning_candidates(self):
+        class D(FakeDrive):
+            async def add_offline(self, magnet, dest):
+                self.n_add = getattr(self, "n_add", 0) + 1
+                raise AttributeError("p115client 里没有 clouddownload_task_add_url")
+        drive = D()
+        meta = {"names": ["Dune"], "year": "2024", "episodes": 0}
+        raw = [Candidate("magnet", "Dune.2024.1080p.WEB-DL.%d" % i, "magnet:?xt=urn:btih:%040d" % i, size=2 * GB) for i in range(5)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        rid = db.create("movie", 970, None, "Dune (2024)")
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual((r["status"], drive.n_add, r["tried"]), ("failed", 1, "[]"))
+        self.assertIn("版本不匹配", r["error"])
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
