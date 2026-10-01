@@ -278,6 +278,14 @@ async def test_litepan(request: Request, x_token: str = Header("")):
     return {"ok": ok, "info": info}
 
 
+@app.post("/api/settings/litepan/trigger")
+async def trigger_litepan(request: Request, x_token: str = Header("")):
+    """发一条真实的联动通知（事件名、来源都用设置里的值），用来验证 LitePan 里的联动是否会被触发。"""
+    admin(request, x_token)
+    ok, info = await litepan.send(cfg.LITEPAN_EVENT, "RequestBridge 手动触发")
+    return {"ok": ok, "info": info, "event": cfg.LITEPAN_EVENT, "source": cfg.LITEPAN_SOURCE}
+
+
 @app.get("/api/settings/token")
 def get_token(request: Request, x_token: str = Header("")):
     """API 令牌：给脚本或 emby-manager 调用管理接口用（X-Token 请求头）。"""

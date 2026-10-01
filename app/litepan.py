@@ -56,5 +56,8 @@ async def _later():
     rids = sorted(_rids)
     _rids.clear()
     ok, info = await send(cfg.LITEPAN_EVENT)
+    src = cfg.LITEPAN_SOURCE or "未带来源"
     for rid in rids:
-        db.log(rid, ("已通知 LitePan 联动（整理 → STRM → Emby 刷库由它完成）" if ok else f"通知 LitePan 失败：{info}"))
+        db.log(rid, (f"已通知 LitePan 联动（事件 {cfg.LITEPAN_EVENT}，来源 {src}）：{info}。"
+                     "没有执行的话，检查 LitePan 联动里的通知名称和来源是否与此一致" if ok
+                     else f"通知 LitePan 失败：{info}"))
