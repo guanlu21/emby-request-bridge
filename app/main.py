@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
-from . import auth as auth_mod, db, drive115, emby, litepan, settings, tmdb
+from . import auth as auth_mod, db, drive115, emby, kite, litepan, settings, tmdb
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
@@ -204,6 +204,21 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
     return {"ok": True}
 
 
+@app.post("/api/requests/{rid}/manual")
+async def manual(rid: int, request: Request, x_token: str = Header("")):
+    """给搜不到的片手动指定 115 分享链接或磁力链接。"""
+    admin(request, x_token)
+    if not db.get(rid):
+        raise HTTPException(404)
+    url = ((await request.json()).get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "请粘贴链接")
+    t = asyncio.create_task(pipe.run_manual(rid, url))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"ok": True}
+
+
 @app.get("/api/users")
 async def users(request: Request, x_token: str = Header("")):
     """按求片人汇总，并带上该 Emby 账号当前是否停用（供管理页或 emby-manager 调用）。"""
@@ -247,6 +262,12 @@ async def put_settings(request: Request, x_token: str = Header("")):
 async def test_settings(request: Request, x_token: str = Header("")):
     admin(request, x_token)
     return await tmdb.test()
+
+
+@app.post("/api/settings/kite/test")
+async def test_kite(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await kite.test()
 
 
 @app.post("/api/settings/litepan/test")

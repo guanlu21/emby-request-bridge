@@ -85,7 +85,7 @@ dialog label{display:flex;gap:8px;padding:5px 0}
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('delete')">批量删除</button>
     <small id="cnt"></small></div>
-  <div class="wrap"><table><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="wrap"><table><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 
 <section id="v-set" class="hide"><div class="form" id="setform"></div></section>
@@ -204,7 +204,13 @@ function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
   $('rows').innerHTML=d.map(x=>`<tr><td><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
   <td>${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
-  <td>${esc(x.requester)||'<small>-</small>'}</td><td class="s-${x.status}">${NAME[x.status]||x.status}<br><small>${esc(x.error)}</small></td><td><small>${esc(x.picked)}</small></td></tr>`).join('');
+  <td>${esc(x.requester)||'<small>-</small>'}</td><td class="s-${x.status}">${NAME[x.status]||x.status}<br><small>${esc(x.error)}</small></td><td><small>${esc(x.picked)}</small></td>
+  <td>${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
+}
+async function manual(id){
+  const url=prompt('粘贴 115 分享链接或磁力链接，将跳过搜索直接处理这一条：');
+  if(!url)return;
+  try{await api(`/api/requests/${id}/manual`,{method:'POST',body:{url}});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
 }
 function pick(id,on){on?sel.add(id):sel.delete(id);$('cnt').textContent=`共 ${shown().length} 条，已选 ${sel.size} 条`}
 function toggleAll(on){shown().forEach(x=>on?sel.add(x.id):sel.delete(x.id));renderAdmin()}
@@ -235,7 +241,7 @@ async function loadSet(){
     if(g.group=='115 网盘')h+=`<div class="row"><span>115 授权</span><div><span id="p115st">检查中…</span> <button class="btn" onclick="p115Test()">测试 115 连接</button> <button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button> <button class="btn" onclick="p115Out()">取消授权</button><small>只填 Cookie 就能用；有 AppID 再扫码授权，授权后优先走开放平台。选目录、授权前会自动保存当前设置。</small></div></div>`;
   }
   h+=`<h3>API 令牌</h3><div class="row"><span>脚本 / emby-manager 用</span><div><button class="btn" onclick="showTok()">显示令牌</button> <button class="btn" onclick="resetTok()">重新生成</button><small><code id="tokv"></code></small></div></div>`;
-  h+=`<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn pri" onclick="saveSet()">保存设置</button><button class="btn" onclick="testSet()">测试 TMDB</button><button class="btn" onclick="testLp()">测试 LitePan</button><small id="tres"></small></div>`;
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn pri" onclick="saveSet()">保存设置</button><button class="btn" onclick="testSet()">测试 TMDB</button><button class="btn" onclick="testLp()">测试 LitePan</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button><small id="tres"></small></div>`;
   $('setform').innerHTML=h;p115Refresh();
 }
 function collect(){
@@ -258,6 +264,12 @@ async function testSet(){
 async function testLp(){
   await saveSet(true);$('tres').textContent='测试中…';
   try{const r=await api('/api/settings/litepan/test',{method:'POST'});$('tres').textContent=(r.ok?'LitePan 连接正常：':'失败：')+r.info}catch(e){$('tres').textContent=e.message}
+}
+async function testKite(){
+  await saveSet(true);$('tres').textContent='测试中…';
+  try{const r=await api('/api/settings/kite/test',{method:'POST'});
+    $('tres').textContent=r.ok?`纸鸢磁力连接正常：工具 ${r.tools.join('、')||'（无）'}；试搜「流浪地球」${r.sample_count} 条${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error}
+  catch(e){$('tres').textContent=e.message}
 }
 async function showTok(){$('tokv').textContent=(await api('/api/settings/token')).token}
 async function resetTok(){

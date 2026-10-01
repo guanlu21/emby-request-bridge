@@ -6,9 +6,12 @@ from urllib.parse import urlparse, parse_qs
 
 import httpx
 
+from . import kite
 from .config import cfg
-from .filters import (Rules, parse_resolution, BAD_TAGS, title_match, score,
-                      magnet_size_ok, has_watermark)
+from collections import Counter
+
+from .filters import (Rules, parse_resolution, BAD_TAGS, match_reason, score,
+                      magnet_size_ok, has_watermark, _years)
 
 
 @dataclass
@@ -50,11 +53,14 @@ def parse_115_share(url: str, password: str = ""):
 
 
 def queries(names, year, media_type, season):
+    """多种查询词：片名+年份、纯片名；剧集再加 S01。资源站标题写法不统一，只靠一种搜不全。"""
     out = []
     for n in names[:3]:
-        out.append(f"{n} {year}" if media_type == "movie" and year else
-                   f"{n} S{season:02d}" if media_type == "tv" else n)
-    return list(dict.fromkeys(out))
+        out.append(f"{n} {year}" if year else n)
+        out.append(n)
+        if media_type == "tv" and season:
+            out.append(f"{n} S{season:02d}")
+    return list(dict.fromkeys(out))[:8]
 
 
 async def search_pansou(c: httpx.AsyncClient, kw: str) -> list[Candidate]:
@@ -87,31 +93,77 @@ async def search_prowlarr(c: httpx.AsyncClient, kw: str, media_type: str) -> lis
     return out
 
 
+async def _kite_search(ks, q: str) -> list[Candidate]:
+    return [Candidate("magnet", r["title"], r["magnet"], size=r["size"], seeders=r["seeders"], src="kite")
+            for r in await ks.search(q) if r["title"]]
+
+
 async def search_all(meta: dict, media_type: str, season):
+    """返回 (候选原始结果, 说明列表)。说明里记录没配置的源和出错的源，便于排查为什么搜不到。"""
     qs = queries(meta["names"], meta["year"], media_type, season)
+    notes, jobs, labels = [], [], []
     async with httpx.AsyncClient(timeout=30) as c:
-        jobs = [search_pansou(c, q) for q in qs] + [search_prowlarr(c, q, media_type) for q in qs]
-        res = await asyncio.gather(*jobs, return_exceptions=True)
-    return [x for r in res if isinstance(r, list) for x in r]
+        if cfg.PANSOU_URL:
+            jobs += [search_pansou(c, q) for q in qs]
+            labels += ["PanSou"] * len(qs)
+        else:
+            notes.append("未配置 PanSou 地址，没有搜分享链接")
+        if cfg.PROWLARR_URL and cfg.PROWLARR_KEY:
+            jobs += [search_prowlarr(c, q, media_type) for q in qs[:4]]
+            labels += ["Prowlarr"] * len(qs[:4])
+        else:
+            notes.append("未配置 Prowlarr 地址或 Key，没有搜磁力")
+        if kite.configured():
+            ks = kite.KiteSession()
+            jobs += [_kite_search(ks, q) for q in qs[:4]]
+            labels += ["纸鸢磁力"] * len(qs[:4])
+        else:
+            ks = None
+        try:
+            res = await asyncio.gather(*jobs, return_exceptions=True)
+        finally:
+            if ks:
+                await ks.close()
+    out, errs = [], Counter()
+    for lb, r in zip(labels, res):
+        if isinstance(r, list):
+            out += r
+        else:
+            errs[f"{lb}：{type(r).__name__}"] += 1
+    notes += [f"{k}（{v} 次请求出错）" for k, v in errs.items()]
+    return out, notes
 
 
-def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, rules: Rules):
+def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, rules: Rules, report=None):
+    """过滤并排序。report（可选）会记录被丢弃的原因计数和示例，写进请求日志方便排查。"""
+    def reject(c, why):
+        if report is not None:
+            report.setdefault("counts", Counter())[why] += 1
+            if len(report.setdefault("samples", [])) < 4:
+                report["samples"].append(f"[{why}] {c.title[:50]}")
+
     seen, out = set(), []
     for c in raw:
-        if c.url in seen or not c.title or BAD_TAGS.search(c.title) or has_watermark(c.title):
+        if c.url in seen or not c.title:
             continue
         seen.add(c.url)
-        if not title_match(c.title, meta["names"], meta["year"], media_type, season):
-            continue
+        if BAD_TAGS.search(c.title):
+            reject(c, "枪版/抢先版"); continue
+        if has_watermark(c.title):
+            reject(c, "带水印"); continue
+        why = match_reason(c.title, meta["names"], meta["year"], media_type, season)
+        if why:
+            reject(c, why); continue
         res = parse_resolution(c.title)
         if res and res < rules.min_res:
-            continue
-        if c.kind == "magnet":
-            if c.size and not magnet_size_ok(c.size, media_type, meta.get("episodes", 0), rules):
-                continue
+            reject(c, "分辨率太低"); continue
         per = 0
         if c.kind == "magnet" and c.size:
+            if not magnet_size_ok(c.size, media_type, meta.get("episodes", 0), rules):
+                reject(c, "体积不在范围"); continue
             per = c.size if media_type == "movie" else c.size / max(meta.get("episodes", 0), 1)
         c.score = score(c.title, c.seeders, c.kind == "share", per, rules)
+        if media_type == "movie" and not _years(c.title):
+            c.score -= 15  # 没写年份：不丢弃，但排在写了年份的后面
         out.append(c)
     return sorted(out, key=lambda x: x.score, reverse=True)

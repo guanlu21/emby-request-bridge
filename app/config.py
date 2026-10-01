@@ -26,6 +26,9 @@ class _Env:
     PROWLARR_URL = os.environ.get("PROWLARR_URL", "")
     PROWLARR_KEY = os.environ.get("PROWLARR_API_KEY", "")
 
+    KITE_URL = os.environ.get("KITE_URL", "")
+    KITE_TOKEN = os.environ.get("KITE_TOKEN", "")
+
     P115_APP_ID = os.environ.get("P115_APP_ID", "")
     P115_COOKIE = os.environ.get("P115_COOKIE", "")
     P115_DEST_MOVIE_CID = _i("P115_DEST_MOVIE_CID", 0)

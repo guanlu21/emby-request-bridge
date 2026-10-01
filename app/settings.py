@@ -28,6 +28,8 @@ SCHEMA = [
         F("pansou_url", "PanSou 地址", help="例如 http://192.168.1.10:8888；留空则不搜分享链接"),
         F("prowlarr_url", "Prowlarr 地址", help="例如 http://192.168.1.10:9696；留空则不搜磁力"),
         F("prowlarr_key", "Prowlarr API Key", "password"),
+        F("kite_url", "纸鸢磁力 MCP 地址", help="例如 https://magnet.kiteyuan.info/mcp，以纸鸢磁力「MCP」页面客户端配置里的 url 为准。它会聚合你在纸鸢里配置的国内磁力站（包括自定义规则的站点）"),
+        F("kite_token", "纸鸢磁力 MCP Token", "password", "在纸鸢磁力「MCP」页面生成（mcp__ 开头）"),
     ]},
     {"group": "LitePan 联动", "fields": [
         F("litepan_url", "LitePan 地址", help="例如 http://192.168.1.10:5211；留空则不联动，改由本服务等一会儿后通知 Emby 刷新"),

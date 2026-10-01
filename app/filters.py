@@ -67,6 +67,11 @@ def norm(s: str) -> str:
     return re.sub(r"[\W_]+", "", s.lower())
 
 
+PACK_STRICT = re.compile(r"全\s*\d+\s*集|\d+\s*集全|完结|(?i:E|EP)\d{1,3}\s*[-~]\s*(?i:E|EP)?\d{1,3}")
+PACK_LOOSE = re.compile(r"全集|合集|(?i:complete)|" + PACK_STRICT.pattern)
+STOP = {"the", "a", "an", "of", "and"}
+
+
 def parse_season(title: str):
     """返回 (季号|None, 是否整季包, 是否多季)"""
     t = title
@@ -74,22 +79,72 @@ def parse_season(title: str):
         return None, False, True
     m = re.search(r"(?i)(?<![a-z])S(\d{1,2})(?:\s*E(\d{1,3}))?(?![a-z0-9])", t)
     if m:
-        return int(m.group(1)), m.group(2) is None, False
+        return int(m.group(1)), m.group(2) is None or bool(PACK_LOOSE.search(t)), False
     m = re.search(r"第\s*(\d{1,2}|[一二三四五六七八九十])\s*季", t)
     if m:
         v = m.group(1)
-        return (int(v) if v.isdigit() else CN_NUM[v]), not re.search(r"第\s*\d+\s*集|E\d+", t, re.I), False
+        single = re.search(r"第\s*\d+\s*集|E\d+", t, re.I) and not PACK_LOOSE.search(t)
+        return (int(v) if v.isdigit() else CN_NUM[v]), not single, False
     return None, False, False
 
 
-def title_match(result_title: str, names: list[str], year, media_type: str, season):
+def _years(text: str) -> list[str]:
+    return re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", text)
+
+
+def name_hit(result_title: str, names: list[str]) -> bool:
+    """名字命中：整名包含，或去掉副标题后包含，或英文名的关键词都出现（不要求相邻、不在乎标点）。"""
     rt = norm(result_title)
-    if not any(norm(n) and norm(n) in rt for n in names):
-        return False
+    toks = set(re.findall(r"[a-z0-9]+", result_title.lower()))
+    cands = []
+    for n in names:
+        cands.append(n)
+        head = re.split(r"[:：]", n, maxsplit=1)[0].strip()
+        if head and head != n and len(norm(head)) >= 2:
+            cands.append(head)
+    for n in cands:
+        k = norm(n)
+        if k and k in rt:
+            return True
+        ts = [t for t in re.findall(r"[a-z0-9]+", n.lower()) if t not in STOP]
+        if len(ts) >= 2 and all(t in toks for t in ts):
+            return True
+    return False
+
+
+def match_reason(result_title: str, names: list[str], year, media_type: str, season) -> str:
+    """不匹配时返回原因，匹配返回空串。年份允许 ±1；标题里没写年份不算错。"""
+    if not name_hit(result_title, names):
+        return "标题不匹配"
+    joined = " ".join(names)
+    ys = [y for y in _years(result_title) if y not in joined]  # 片名本身带数字（如 1917）不算年份
+    try:
+        ty = int(year)
+    except (TypeError, ValueError):
+        ty = None
     if media_type == "movie":
-        return not year or str(year) in result_title
+        if ys and ty and not any(abs(int(y) - ty) <= 1 for y in ys):
+            return "年份不符"
+        return ""
     s, pack, multi = parse_season(result_title)
-    return (not multi) and s == season and pack
+    if multi:
+        return "多季合集"
+    if s is not None:
+        if s != season:
+            return "季不符"
+        if not pack:
+            return "只有单集"
+    elif season != 1 or not PACK_STRICT.search(result_title):
+        return "没写季/整季信息"
+    if ys and ty:
+        ok = any(abs(int(y) - ty) <= 1 for y in ys) if season == 1 else any(int(y) >= ty - 1 for y in ys)
+        if not ok:
+            return "年份不符"
+    return ""
+
+
+def title_match(result_title: str, names: list[str], year, media_type: str, season):
+    return not match_reason(result_title, names, year, media_type, season)
 
 
 def score(title: str, seeders: int = 0, is_share: bool = False, per_file: float = 0, rules: Rules = None) -> int:

@@ -275,6 +275,113 @@ class CookieOnlyTest(unittest.TestCase):
             cfg.P115_COOKIE = ""
 
 
+class MatchingTest(unittest.TestCase):
+    def test_looser_matching(self):
+        from app.filters import match_reason
+        # 英文片名标点不同、词序不同
+        self.assertEqual(match_reason("Part.Two.Dune.2024.1080p", ["Dune: Part Two"], "2024", "movie", None), "")
+        # 副标题不写
+        self.assertEqual(match_reason("沙丘 2024 4K 中字", ["沙丘：第二部"], "2024", "movie", None), "")
+        # 年份 ±1 可以，差太多不行，没写年份可以
+        self.assertEqual(match_reason("Movie.2023.1080p", ["Movie"], "2024", "movie", None), "")
+        self.assertEqual(match_reason("Movie.2019.1080p", ["Movie"], "2024", "movie", None), "年份不符")
+        self.assertEqual(match_reason("Movie.1080p", ["Movie"], "2024", "movie", None), "")
+        # 片名本身带数字
+        self.assertEqual(match_reason("1917.2019.1080p", ["1917"], "2019", "movie", None), "")
+        self.assertEqual(match_reason("完全无关 2024", ["Dune"], "2024", "movie", None), "标题不匹配")
+
+    def test_tv_rules(self):
+        from app.filters import match_reason
+        n = ["笑傲江湖"]
+        self.assertEqual(match_reason("笑傲江湖 全40集 1080p", n, "2001", "tv", 1), "")              # 单季剧不写 S01
+        self.assertNotEqual(match_reason("笑傲江湖 全40集 1080p", n, "2001", "tv", 2), "")
+        self.assertNotEqual(match_reason("笑傲江湖.2013.E01-E50.1080p", n, "2001", "tv", 1), "")     # 另一个年代的版本
+        self.assertEqual(match_reason("笑傲江湖.2001.E01-E40.1080p", n, "2001", "tv", 1), "")
+        self.assertEqual(match_reason("Show S01E01-E10 1080p", ["Show"], "2020", "tv", 1), "")
+        self.assertEqual(match_reason("Show S01E05 1080p", ["Show"], "2020", "tv", 1), "只有单集")
+        self.assertNotEqual(match_reason("笑傲江湖 合集", n, "2001", "tv", 1), "")                    # 含糊的"合集"不收
+
+    def test_report(self):
+        from collections import Counter
+        meta = {"names": ["Dune"], "year": "2024", "episodes": 0}
+        rep = {}
+        build_candidates([Candidate("magnet", "Other.Movie.2024.1080p", "magnet:?xt=urn:btih:1", size=2 * GB),
+                          Candidate("magnet", "Dune.2019.1080p", "magnet:?xt=urn:btih:2", size=2 * GB),
+                          Candidate("magnet", "Dune.2024.1080p.带水印", "magnet:?xt=urn:btih:3", size=2 * GB)],
+                         meta, "movie", None, R, rep)
+        self.assertEqual(dict(rep["counts"]), {"标题不匹配": 1, "年份不符": 1, "带水印": 1})
+        self.assertEqual(len(rep["samples"]), 3)
+
+
+class KiteTest(unittest.TestCase):
+    def test_parse_json_list_and_dict(self):
+        from app import kite
+        m1 = "magnet:?xt=urn:btih:" + "a" * 40
+        m2 = "magnet:?xt=urn:btih:" + "b" * 40
+        r = kite.parse_results('[{"title":"流浪地球2 2023 1080p","magnet":"%s","size":"2.3 GB","seeders":12},{"name":"x","url":"%s"}]' % (m1, m2))
+        self.assertEqual((r[0]["title"], r[0]["magnet"], r[0]["seeders"]), ("流浪地球2 2023 1080p", m1, 12))
+        self.assertAlmostEqual(r[0]["size"], 2.3 * GB, delta=1)
+        self.assertEqual(r[1]["magnet"], m2)
+        r = kite.parse_results('{"results":[{"title":"T","magnet_link":"%s","size":2500000000}]}' % m1)
+        self.assertEqual(r[0]["size"], 2500000000)
+
+    def test_parse_plain_text(self):
+        from app import kite
+        m1 = "magnet:?xt=urn:btih:" + "c" * 40
+        m2 = "magnet:?xt=urn:btih:" + "d" * 40
+        text = f"1. 流浪地球2.2023.1080p.WEB-DL.mkv\n   大小: 3.1 GB\n   {m1}\n\n2. The.Wandering.Earth.2.2023.2160p\n   大小: 12 GB\n   磁力: {m2}"
+        r = kite.parse_results(text)
+        self.assertEqual(len(r), 2)
+        self.assertIn("流浪地球2", r[0]["title"]); self.assertAlmostEqual(r[0]["size"], 3.1 * GB, delta=1)
+        self.assertIn("Wandering", r[1]["title"])
+
+    def test_session_flow_and_sse(self):
+        from app import kite
+        from app.config import cfg
+        cfg.KITE_URL, cfg.KITE_TOKEN = "https://magnet.example/mcp", "mcp__tok"
+        calls = []
+        mag = "magnet:?xt=urn:btih:" + "e" * 40
+
+        class Resp:
+            def __init__(self, code=200, body=None, sse=False, hdr=None):
+                self.status_code, self._b, self._sse = code, body, sse
+                self.headers = {"content-type": "text/event-stream" if sse else "application/json", **(hdr or {})}
+                import json as _j
+                self.text = ("event: message\ndata: " + _j.dumps(body) + "\n\n") if sse else ""
+            def json(self): return self._b
+
+        class Client:
+            def __init__(self, *a, **k): pass
+            async def aclose(self): pass
+            async def post(self, url, json=None, headers=None):
+                calls.append((json, dict(headers)))
+                m = json["method"]
+                if m == "initialize":
+                    return Resp(body={"jsonrpc": "2.0", "id": json["id"], "result": {}}, hdr={"mcp-session-id": "S1"})
+                if m == "notifications/initialized":
+                    return Resp(202, {})
+                if m == "tools/call":   # 用 SSE 回包
+                    return Resp(sse=True, body={"jsonrpc": "2.0", "id": json["id"], "result": {"content": [
+                        {"type": "text", "text": '[{"title":"片 2023 1080p","magnet":"%s","size":"2 GB"}]' % mag}]}})
+                return Resp(body={"jsonrpc": "2.0", "id": json["id"], "result": {"tools": [{"name": "magnet_search"}]}})
+        kite.httpx = type("H", (), {"AsyncClient": Client, "Response": object})
+
+        async def go():
+            s = kite.KiteSession()
+            r1 = await s.search("片 2023", 20)
+            r2 = await s.search("片", 20)
+            return r1, r2, await s.tools()
+        r1, r2, tools = asyncio.run(go())
+        self.assertEqual(r1[0]["magnet"], mag); self.assertEqual(len(r2), 1)
+        self.assertEqual(tools, ["magnet_search"])
+        methods = [c[0]["method"] for c in calls]
+        self.assertEqual(methods.count("initialize"), 1)               # 会话只初始化一次
+        call = next(c for c in calls if c[0]["method"] == "tools/call")
+        self.assertEqual(call[0]["params"], {"name": "magnet_search", "arguments": {"query": "片 2023", "limit": 20}})
+        self.assertEqual(call[1]["Authorization"], "Bearer mcp__tok")
+        self.assertEqual(call[1]["Mcp-Session-Id"], "S1")             # 沿用服务端给的会话 ID
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
