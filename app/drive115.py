@@ -1,8 +1,9 @@
 """115 驱动。流程只依赖 Drive115 这几个方法，方便替换/测试。
 
 - OpenDrive：115 开放平台（扫码授权，access_token 自动续期），负责建目录、列目录、移动、删除、磁力离线。
-- P115Drive：Cookie + p115client，只用来转存分享链接（开放平台没有这个接口），Cookie 可选。
-- CompositeDrive：把两者拼起来给流程用。
+- P115Drive：Cookie + p115client。没有 AppID 时它负责全部操作；有开放平台授权时只用来转存分享链接
+  （开放平台没有这个接口）。
+- CompositeDrive：按配置选择后端：已授权开放平台 → 走 Open；否则有 Cookie → 走 Cookie；都没有就报错。
 
 注意：开发环境无法联网，以上接口都是按公开文档写的，尚未用真实账号联调；请先调用 /api/selftest 验证。
 """
@@ -52,6 +53,9 @@ class P115Drive:
     async def _children(self, cid: int) -> list[dict]:
         r = await self._run(self.c.fs_files, {"cid": cid, "limit": 1000, "show_dir": 1})
         return r.get("data", [])
+
+    async def list_dirs(self, cid: int) -> list[dict]:
+        return [{"id": int(it["cid"]), "name": it.get("n", "")} for it in await self._children(cid) if "fid" not in it]
 
     async def mkdir(self, parent: int, name: str) -> int:
         r = await self._run(self.c.fs_mkdir, {"cname": name, "pid": parent})
@@ -161,7 +165,9 @@ async def auth_poll() -> dict:
 
 def auth_status() -> dict:
     s = settings.get()
-    return {"authorized": bool(s["p115_refresh"]), "app_id_set": bool(s["p115_app_id"])}
+    mode = "open" if s["p115_refresh"] else ("cookie" if cfg.P115_COOKIE else "none")
+    return {"authorized": bool(s["p115_refresh"]), "app_id_set": bool(s["p115_app_id"]),
+            "cookie": bool(cfg.P115_COOKIE), "mode": mode}
 
 
 def auth_clear():
@@ -279,11 +285,26 @@ class OpenDrive:
 
 
 class CompositeDrive:
-    """开放平台负责文件操作和磁力离线；分享转存只在配置了 Cookie 时才可用。"""
+    """已授权开放平台就走 Open；否则用 Cookie；分享链接转存始终需要 Cookie。"""
 
     def __init__(self):
         self.open = OpenDrive()
         self._cookie, self._ck = "", None
+
+    def _cookie_drive(self) -> "P115Drive":
+        if cfg.P115_COOKIE != self._cookie or self._ck is None:
+            self._ck, self._cookie = P115Drive(cfg.P115_COOKIE), cfg.P115_COOKIE
+        return self._ck
+
+    def backend(self):
+        if settings.get()["p115_refresh"]:
+            return self.open
+        if cfg.P115_COOKIE:
+            return self._cookie_drive()
+        raise RuntimeError("还没有登录 115：请在「设置 → 115 网盘」填写 Cookie，或填 AppID 后扫码授权，并先点「保存设置」")
+
+    def mode(self) -> str:
+        return auth_status()["mode"]
 
     def can_receive_share(self) -> bool:
         return bool(cfg.P115_COOKIE)
@@ -291,11 +312,9 @@ class CompositeDrive:
     async def receive_share(self, share_code, receive_code, dest):
         if not cfg.P115_COOKIE:
             raise RuntimeError("没有配置 115 Cookie，无法转存分享链接")
-        if cfg.P115_COOKIE != self._cookie:
-            self._ck, self._cookie = P115Drive(cfg.P115_COOKIE), cfg.P115_COOKIE
-        await self._ck.receive_share(share_code, receive_code, dest)
+        await self._cookie_drive().receive_share(share_code, receive_code, dest)
 
     def __getattr__(self, name):
-        if name.startswith("__"):
+        if name.startswith("__") or name in ("open", "_cookie", "_ck"):
             raise AttributeError(name)
-        return getattr(self.open, name)
+        return getattr(self.backend(), name)

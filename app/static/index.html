@@ -232,7 +232,7 @@ async function loadSet(){
   const d=await api('/api/settings');SET=d;FOLDER={};let h='';
   for(const g of d.schema){
     h+=`<h3>${esc(g.group)}</h3>`+g.fields.map(f=>fieldHtml(f,d)).join('');
-    if(g.group=='115 网盘')h+=`<div class="row"><span>115 授权</span><div><span id="p115st">检查中…</span> <button class="btn" onclick="p115Auth()">扫码授权</button> <button class="btn" onclick="p115Out()">取消授权</button><small>先填 AppID 再授权；授权后服务会自动续期，不用再管。</small></div></div>`;
+    if(g.group=='115 网盘')h+=`<div class="row"><span>115 授权</span><div><span id="p115st">检查中…</span> <button class="btn" onclick="p115Test()">测试 115 连接</button> <button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button> <button class="btn" onclick="p115Out()">取消授权</button><small>只填 Cookie 就能用；有 AppID 再扫码授权，授权后优先走开放平台。选目录、授权前会自动保存当前设置。</small></div></div>`;
   }
   h+=`<h3>API 令牌</h3><div class="row"><span>脚本 / emby-manager 用</span><div><button class="btn" onclick="showTok()">显示令牌</button> <button class="btn" onclick="resetTok()">重新生成</button><small><code id="tokv"></code></small></div></div>`;
   h+=`<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn pri" onclick="saveSet()">保存设置</button><button class="btn" onclick="testSet()">测试 TMDB</button><button class="btn" onclick="testLp()">测试 LitePan</button><small id="tres"></small></div>`;
@@ -265,7 +265,7 @@ async function resetTok(){
   await api('/api/settings/token/reset',{method:'POST'});toast('已重新生成，请重新登录');showLogin();
 }
 /* 115 目录选择 */
-async function pickFolder(key){FKEY=key;FSTACK=[{id:0,name:'根目录'}];$('fdlg').showModal();await fload()}
+async function pickFolder(key){await saveSet(true);FKEY=key;FSTACK=[{id:0,name:'根目录'}];$('fdlg').showModal();await fload()}
 async function fload(){
   const cur=FSTACK[FSTACK.length-1];$('fpath').textContent=FSTACK.map(x=>x.name).join(' / ');$('flist').textContent='加载中…';
   try{FLIST=await api('/api/p115/folders?cid='+cur.id);
@@ -279,7 +279,7 @@ function fchoose(){
   FOLDER[FKEY]={cid:cur.id,label};$('f_'+FKEY).value=label;$('fdlg').close();
 }
 /* 115 扫码授权 */
-async function p115Refresh(){try{const s=await api('/api/p115/status');$('p115st').textContent=s.authorized?'已授权':'未授权'}catch(e){}}
+async function p115Refresh(){try{const s=await api('/api/p115/status');X}catch(e){}}
 async function p115Auth(){
   await saveSet(true);
   try{

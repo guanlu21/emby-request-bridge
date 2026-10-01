@@ -245,6 +245,36 @@ class LitePanTest(unittest.TestCase):
         self.assertIn("已通知 LitePan", db.get(b)["log"])
 
 
+class CookieOnlyTest(unittest.TestCase):
+    def test_backend_selection(self):
+        from app import drive115, settings
+        from app.config import cfg
+
+        class FakeCookieDrive:
+            def __init__(self, cookie): self.cookie = cookie
+            async def list_dirs(self, cid): return [{"id": 9, "name": "电影"}]
+        orig = drive115.P115Drive
+        drive115.P115Drive = FakeCookieDrive
+        try:
+            settings.set_internal(p115_refresh="", p115_access="")
+            cfg.P115_COOKIE = ""
+            d = drive115.CompositeDrive()
+            with self.assertRaises(RuntimeError) as cm:        # 都没有：明确提示
+                d.backend()
+            self.assertIn("Cookie", str(cm.exception))
+            cfg.P115_COOKIE = "UID=1; CID=2; SEID=3"
+            self.assertEqual(d.mode(), "cookie")
+            self.assertEqual(asyncio.run(d.list_dirs(0)), [{"id": 9, "name": "电影"}])   # 只有 Cookie 也能选目录
+            self.assertTrue(d.can_receive_share())
+            settings.set_internal(p115_refresh="R", p115_expires=0)   # 授权了开放平台 → 优先走 Open
+            self.assertIs(d.backend(), d.open)
+            self.assertEqual(d.mode(), "open")
+        finally:
+            drive115.P115Drive = orig
+            settings.set_internal(p115_refresh="")
+            cfg.P115_COOKIE = ""
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")

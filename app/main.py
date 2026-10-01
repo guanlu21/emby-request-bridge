@@ -290,6 +290,17 @@ def p115_status(request: Request, x_token: str = Header("")):
     return drive115.auth_status()
 
 
+@app.post("/api/p115/test")
+async def p115_test(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    try:
+        mode = pipe.drive.mode()
+        dirs = await pipe.drive.list_dirs(0)
+        return {"ok": True, "mode": mode, "root_dirs": len(dirs)}
+    except Exception as e:  # noqa
+        return {"ok": False, "error": str(e)[:200]}
+
+
 @app.post("/api/p115/auth/start")
 async def p115_start(request: Request, x_token: str = Header("")):
     admin(request, x_token)

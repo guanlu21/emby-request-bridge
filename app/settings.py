@@ -18,8 +18,8 @@ SCHEMA = [
         F("admins", "管理员", help="Emby 用户名，多个用逗号分隔。第一个登录的 Emby 管理员会自动加入"),
     ]},
     {"group": "115 网盘", "fields": [
-        F("p115_app_id", "115 开放平台 AppID", help="在 115 开放平台申请；建议给本服务单独申请，别和 LitePan 共用"),
-        F("p115_cookie", "115 Cookie（可选）", "password", "开放平台接口不支持转存分享链接；不填则只走磁力离线下载，填了才会转存分享链接（Cookie 会失效）"),
+        F("p115_cookie", "115 Cookie", "password", "没有 AppID 时用它登录 115：浏览器登录 115.com 后复制包含 UID、CID、SEID 的完整 Cookie。Cookie 会失效，失效后重新复制即可；已扫码授权开放平台时，它只用于转存分享链接"),
+        F("p115_app_id", "115 开放平台 AppID（可选）", help="有 AppID 就扫码授权，更稳定、不会过期；没有就先只填 Cookie。建议给本服务单独申请，别和 LitePan 共用"),
         F("p115_dest_movie_cid", "电影目录", "folder", "整理前的正式目录，LitePan 监控它"),
         F("p115_dest_tv_cid", "剧集目录", "folder", "同上，放剧集"),
         F("p115_staging_cid", "暂存目录", "folder", "下载先放这里，合格才移走；必须在 LitePan 监控范围之外"),
