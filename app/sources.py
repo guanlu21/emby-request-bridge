@@ -1,4 +1,4 @@
-"""搜索源：TMDB 元数据、PanSou（115 分享 + 磁力）、Prowlarr（磁力）。"""
+"""搜索源：TMDB 元数据、PanSou（115 分享 + 磁力）、CloudSaver（115 分享）、纸鸢磁力（磁力）。"""
 import asyncio
 import re
 from dataclasses import dataclass
@@ -6,12 +6,12 @@ from urllib.parse import urlparse, parse_qs
 
 import httpx
 
-from . import kite
+from . import cloudsaver, kite
 from .config import cfg
 from collections import Counter
 
 from .filters import (Rules, parse_resolution, BAD_TAGS, match_reason, score,
-                      magnet_size_ok, has_watermark, _years)
+                      magnet_size_ok, has_watermark, _years, kw_reason, kw_bonus)
 
 
 @dataclass
@@ -23,6 +23,7 @@ class Candidate:
     size: float = 0
     seeders: int = 0
     src: str = ""
+    text: str = ""  # 附加描述（如 CloudSaver 的正文），只参与关键词筛选，不参与片名匹配
     score: int = 0
 
 
@@ -80,20 +81,9 @@ async def search_pansou(c: httpx.AsyncClient, kw: str) -> list[Candidate]:
     return out
 
 
-async def search_prowlarr(c: httpx.AsyncClient, kw: str, media_type: str) -> list[Candidate]:
-    if not cfg.PROWLARR_KEY:
-        return []
-    r = await c.get(f"{cfg.PROWLARR_URL}/api/v1/search",
-                    params={"query": kw, "type": "search", "limit": 100,
-                            "categories": 2000 if media_type == "movie" else 5000},
-                    headers={"X-Api-Key": cfg.PROWLARR_KEY})
-    out = []
-    for it in r.json():
-        mag = it.get("magnetUrl") or ""
-        if mag.startswith("magnet:"):  # 只有磁力能交给 115 离线；.torrent 代理链接 115 访问不到
-            out.append(Candidate("magnet", it.get("title", ""), mag, size=it.get("size") or 0,
-                                 seeders=it.get("seeders") or 0, src=f"prowlarr/{it.get('indexer', '')}"))
-    return out
+async def _cloudsaver_search(cs, q: str) -> list[Candidate]:
+    return [Candidate("share", r["title"], r["url"], r["password"], src="cloudsaver", text=r["text"])
+            for r in await cs.search(q)]
 
 
 async def _kite_search(ks, q: str) -> list[Candidate]:
@@ -111,11 +101,12 @@ async def search_all(meta: dict, media_type: str, season):
             labels += ["PanSou"] * len(qs)
         else:
             notes.append("未配置 PanSou 地址，没有搜分享链接")
-        if cfg.PROWLARR_URL and cfg.PROWLARR_KEY:
-            jobs += [search_prowlarr(c, q, media_type) for q in qs[:4]]
-            labels += ["Prowlarr"] * len(qs[:4])
+        if cloudsaver.configured():
+            csv = cloudsaver.CloudSaver()
+            jobs += [_cloudsaver_search(csv, q) for q in qs[:3]]
+            labels += ["CloudSaver"] * len(qs[:3])
         else:
-            notes.append("未配置 Prowlarr 地址或 Key，没有搜磁力")
+            csv = None
         if kite.configured():
             ks = kite.KiteSession()
             jobs += [_kite_search(ks, q) for q in qs[:4]]
@@ -127,6 +118,8 @@ async def search_all(meta: dict, media_type: str, season):
         finally:
             if ks:
                 await ks.close()
+            if csv:
+                await csv.close()
     out, errs = [], Counter()
     for lb, r in zip(labels, res):
         if isinstance(r, list):
@@ -160,12 +153,15 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
         res = parse_resolution(c.title)
         if res and res < rules.min_res:
             reject(c, "分辨率太低"); continue
+        why = kw_reason(c.title + " " + c.text, cfg.KW_ALL, cfg.KW_ANY, cfg.KW_EXCLUDE)
+        if why:
+            reject(c, why); continue
         per = 0
         if c.kind == "magnet" and c.size:
             if not magnet_size_ok(c.size, media_type, meta.get("episodes", 0), rules):
                 reject(c, "体积不在范围"); continue
             per = c.size if media_type == "movie" else c.size / max(meta.get("episodes", 0), 1)
-        c.score = score(c.title, c.seeders, c.kind == "share", per, rules)
+        c.score = score(c.title, c.seeders, c.kind == "share", per, rules) + kw_bonus(c.title + " " + c.text, cfg.KW_PREFER)
         if media_type == "movie" and not _years(c.title):
             c.score -= 15  # 没写年份：不丢弃，但排在写了年份的后面
         out.append(c)

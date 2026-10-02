@@ -16,6 +16,16 @@ class SetupError(Exception):
     """配置/环境问题（目录无效、115 没登录等）：换资源也没用，直接终止，且不把候选记为已试。"""
 
 
+def cand_dict(c: Candidate) -> dict:
+    return {"title": c.title, "kind": c.kind, "src": c.src, "score": c.score, "url": c.url,
+            "password": c.password, "size": c.size, "seeders": c.seeders}
+
+
+def cand_from(d: dict) -> Candidate:
+    return Candidate(d["kind"], d["title"], d["url"], d.get("password", ""), d.get("size", 0), d.get("seeders", 0),
+                     d.get("src", ""), score=d.get("score", 0))
+
+
 def rules() -> Rules:
     return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3,
                  cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3, cfg.KEEP_MIN_MB * 1024 ** 2)
@@ -41,8 +51,9 @@ class Pipeline:
                 db.log(rid, f"提示：{n}")
             tried = set(json.loads(r["tried"]))
             report = {}
-            cands = [c for c in build_candidates(raw, meta, r["media_type"], r["season"], rules(), report)
-                     if c.url not in tried]
+            built = build_candidates(raw, meta, r["media_type"], r["season"], rules(), report)
+            db.update(rid, cands=json.dumps([cand_dict(c) for c in built[:40]], ensure_ascii=False))
+            cands = [c for c in built if c.url not in tried]
             if report.get("counts"):
                 db.log(rid, "过滤掉：" + "、".join(f"{k} {v}" for k, v in report["counts"].most_common()))
                 if not cands:
@@ -93,49 +104,92 @@ class Pipeline:
                 raise SetupError(f"115 {label}无法访问（{e}）。请到「设置 → 115 网盘 / 入库分类」重新选择该目录，并点「测试 115 连接」")
 
     async def run_manual(self, rid: int, url: str):
-        """管理员手动指定一个 115 分享链接或磁力链接：跳过搜索和标题筛选，仍会按文件规则过滤视频。"""
+        await self.run_candidate(rid, url, replace=False)
+
+    async def run_candidate(self, rid: int, url: str, replace: bool = False):
+        """使用指定资源（候选列表里的，或手动粘贴的 115 分享/磁力链接）。
+        replace=True：新资源下载并通过筛选后，才会删除之前入库的文件；新资源失败时原文件保留、状态不变。"""
         r = db.get(rid)
+        old = None
         try:
+            if replace:
+                try:
+                    old = json.loads(r["placed"] or "null")
+                except ValueError:
+                    old = None
             db.update(rid, status="downloading", error="")
+            await self.preflight(r)
             meta = await self.meta_fn(r)
             url = url.strip()
-            if url.startswith("magnet:"):
+            known = next((d for d in json.loads(r["cands"] or "[]") if d["url"] == url), None)
+            if known:
+                c = cand_from(known)
+            elif url.startswith("magnet:"):
                 c = Candidate("magnet", "手动指定", url, src="manual")
             elif parse_115_share(url):
                 c = Candidate("share", "手动指定", url, src="manual")
             else:
                 raise RuntimeError("只支持 magnet 磁力链接或 115 分享链接")
-            db.log(rid, f"手动指定资源：[{c.kind}] {url[:60]}")
-            if await self.attempt(r, meta, c):
-                db.update(rid, status="done", picked="手动指定")
+            db.log(rid, ("替换为：" if replace else "手动指定资源：") + f"[{c.kind}] {c.title[:60]}")
+            ok = await self.attempt(r, meta, c, replace_old=old)
+            tried = set(json.loads(db.get(rid)["tried"]))
+            tried.add(c.url)
+            db.update(rid, tried=json.dumps(sorted(tried)))
+            if ok:
+                db.update(rid, status="done", picked=c.title)
                 await self.after_fn(r)
+            elif replace and old:
+                db.update(rid, status="done", error="替换失败，原资源保留（详情看日志）")
             else:
-                db.update(rid, status="failed", error="手动指定的资源也失败了，详情看日志")
+                db.update(rid, status="failed", error="这个资源也失败了，详情看日志")
         except Exception as e:  # noqa
-            db.log(rid, f"异常: {e!r}")
-            db.update(rid, status="failed", error=str(e)[:200])
+            db.log(rid, str(e) if isinstance(e, SetupError) else f"异常: {e!r}")
+            if replace and old:
+                db.update(rid, status="done", error=("替换失败，原资源保留：" + str(e))[:200])
+            else:
+                db.update(rid, status="failed", error=str(e)[:200])
 
     async def dest_dir(self, r, meta) -> int:
-        """分类目录 + 片名目录（+ Season 目录）。同一时刻只允许一个请求在建目录，避免重复。"""
-        name = classify.sanitize(f"{meta['names'][0]} ({meta['year']})" if meta.get("year") else meta["names"][0])
-        parts = classify.classify(r["media_type"], meta) if cfg.LIBRARY_ROOT_CID else []
-        parts = parts + [name] + ([f"Season {r['season']:02d}"] if r["media_type"] == "tv" else [])
+        """分类目录 + 片名目录（+ 季目录），名字按命名模板。同一时刻只允许一个请求在建目录，避免重复。"""
+        v = classify.vars_for(r, meta)
+        cat = classify.classify(r["media_type"], meta) if cfg.LIBRARY_ROOT_CID else []
+        if r["media_type"] == "movie":
+            leaf = [classify.render(cfg.NAME_MOVIE_DIR, v)]
+        else:
+            leaf = [classify.render(cfg.NAME_TV_DIR, v), classify.render(cfg.NAME_SEASON_DIR, v)]
+        parts = cat + [x for x in leaf if x]
         async with self._dest_lock:
             cid = self._library_cid(r)
             for p in parts:
                 cid = await self.drive.ensure_dir(cid, p)
+        db.update(r["id"], category="-".join(cat) or ("电影" if r["media_type"] == "movie" else "电视剧"))
         db.log(r["id"], "入库位置：" + " / ".join(parts))
         return cid
 
-    async def rename_files(self, rid, files, r, meta):
-        """按 Emby 的命名习惯改名；任何一步失败都只记日志，保留原文件名，不影响入库。"""
+    async def remove_placed(self, rid, old: dict, new_dest):
+        """替换成功前删除旧资源的文件；失败只记日志（可能留下重复文件，需要手动清理）。"""
+        try:
+            await self.drive.delete(old["files"])
+            db.log(rid, f"已删除旧资源的 {len(old['files'])} 个文件")
+        except Exception as e:  # noqa
+            db.log(rid, f"删除旧文件失败（请到 115 手动清理）：{e}")
+            return
+        if str(old.get("dest")) != str(new_dest):  # 分类变了：旧目录空了就一并删掉
+            try:
+                if not await self.drive.list_files(int(old["dest"])):
+                    await self.drive.delete([old["dest"]])
+            except Exception:  # noqa
+                pass
+
+    async def rename_files(self, rid, files, r, meta, hint=""):
+        """按命名模板改名（带 TMDB 编号等）；任何一步失败都只记日志，保留原文件名，不影响入库。"""
         try:
             fn = self.drive.rename
         except Exception:  # noqa
             return
         used, done = set(), 0
         for f in files:
-            new = classify.target_name(r["media_type"], meta["names"][0], meta.get("year"), r["season"], f["name"], used)
+            new = classify.target_name(r, meta, f["name"], hint, used)
             if not new or new == f["name"]:
                 continue
             try:
@@ -146,9 +200,9 @@ class Pipeline:
                 db.log(rid, f"重命名失败（保留原名）：{e}")
                 return
         if done:
-            db.log(rid, f"已按 Emby 命名规则重命名 {done} 个文件")
+            db.log(rid, f"已按命名格式重命名 {done} 个文件")
 
-    async def attempt(self, r, meta, c) -> bool:
+    async def attempt(self, r, meta, c, replace_old=None) -> bool:
         rid, stage = r["id"], None
         try:
             stage = await self.drive.mkdir(cfg.P115_STAGING_CID, f"req{rid}-{int(time.time())}")
@@ -180,8 +234,11 @@ class Pipeline:
                 dest = await self.dest_dir(r, meta)
             except Exception as e:  # noqa
                 raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
-            await self.rename_files(rid, keep, r, meta)
+            if replace_old:
+                await self.remove_placed(rid, replace_old, dest)
+            await self.rename_files(rid, keep, r, meta, c.title)
             await self.drive.move([f["id"] for f in keep], dest)
+            db.update(rid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in keep]}))
             return True
         except SetupError:
             raise
@@ -199,11 +256,13 @@ class Pipeline:
 
 
 async def notify_after(r):
-    """入库通知：配了 LitePan 就触发它的自动联动（整理 → STRM → Emby 刷库）；
+    """入库通知：配了 LitePan 就触发它的自动联动（来源按分类区分，只处理对应目录）；
     没配就等一会儿，由本服务直接让 Emby 刷新媒体库。"""
     if litepan.configured():
-        litepan.schedule(r["id"])
-        db.log(r["id"], f"已排队通知 LitePan（{cfg.LITEPAN_DELAY} 秒内的多个请求合并成一次）")
+        cat = (db.get(r["id"]) or {}).get("category", "")
+        src = litepan.source_for(cat)
+        litepan.schedule(r["id"], src)
+        db.log(r["id"], f"已排队通知 LitePan（来源 {src or '未带'}；{cfg.LITEPAN_DELAY} 秒内同来源的多个请求合并成一次）")
         return
     await asyncio.sleep(cfg.LITEPAN_WAIT)
     if cfg.EMBY_URL and cfg.EMBY_KEY:

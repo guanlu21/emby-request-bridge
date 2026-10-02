@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import json
 import re
 import secrets
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
-from . import auth as auth_mod, db, drive115, emby, kite, litepan, settings, tmdb
+from . import auth as auth_mod, cloudsaver, db, drive115, emby, kite, litepan, settings, tmdb
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
@@ -204,6 +205,40 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
     return {"ok": True}
 
 
+@app.get("/api/requests/{rid}/candidates")
+def candidates(rid: int, request: Request, x_token: str = Header("")):
+    """这条请求筛选出的候选资源（含已试过、当前使用的状态），用于一键替换。"""
+    admin(request, x_token)
+    r = db.get(rid)
+    if not r:
+        raise HTTPException(404)
+    tried = set(json.loads(r["tried"] or "[]"))
+    out = []
+    for c in json.loads(r["cands"] or "[]"):
+        c["state"] = "当前使用" if (r["status"] == "done" and c["title"] == r["picked"]) else ("已试过" if c["url"] in tried else "")
+        c.pop("password", None)
+        out.append(c)
+    return {"title": r["title"], "status": r["status"], "picked": r["picked"], "candidates": out}
+
+
+@app.post("/api/requests/{rid}/replace")
+async def replace(rid: int, request: Request, x_token: str = Header("")):
+    """改用另一个候选资源。新资源下载并通过筛选后，才会删除之前入库的文件。"""
+    admin(request, x_token)
+    r = db.get(rid)
+    if not r:
+        raise HTTPException(404)
+    if r["status"] not in ("done", "failed"):
+        raise HTTPException(400, "这条请求还在处理中，等它结束后再替换")
+    url = ((await request.json()).get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "缺少资源")
+    t = asyncio.create_task(pipe.run_candidate(rid, url, replace=r["status"] == "done"))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"ok": True}
+
+
 @app.post("/api/requests/{rid}/manual")
 async def manual(rid: int, request: Request, x_token: str = Header("")):
     """给搜不到的片手动指定 115 分享链接或磁力链接。"""
@@ -270,20 +305,31 @@ async def test_kite(request: Request, x_token: str = Header("")):
     return await kite.test()
 
 
+@app.post("/api/settings/cloudsaver/test")
+async def test_cloudsaver(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await cloudsaver.test()
+
+
 @app.post("/api/settings/litepan/test")
 async def test_litepan(request: Request, x_token: str = Header("")):
     """发一条名为 bridge_test 的通知：验证地址和秘钥。联动里没有这个名称，所以不会真的执行任何任务。"""
     admin(request, x_token)
-    ok, info = await litepan.send("bridge_test", "RequestBridge 连接测试")
-    return {"ok": ok, "info": info}
+    return await litepan.send_detail("bridge_test", "RequestBridge 连接测试")
 
 
 @app.post("/api/settings/litepan/trigger")
 async def trigger_litepan(request: Request, x_token: str = Header("")):
-    """发一条真实的联动通知（事件名、来源都用设置里的值），用来验证 LitePan 里的联动是否会被触发。"""
+    """发一条真实的联动通知（事件名用设置里的值，来源按所选分类生成），用来验证 LitePan 里的联动会不会被触发。"""
     admin(request, x_token)
-    ok, info = await litepan.send(cfg.LITEPAN_EVENT, "RequestBridge 手动触发")
-    return {"ok": ok, "info": info, "event": cfg.LITEPAN_EVENT, "source": cfg.LITEPAN_SOURCE}
+    cat = ((await request.json()).get("category") or "").strip()
+    return await litepan.send_detail(cfg.LITEPAN_EVENT, "RequestBridge 手动触发", litepan.source_for(cat))
+
+
+@app.get("/api/settings/litepan/sources")
+def litepan_sources(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return {"event": cfg.LITEPAN_EVENT, "sources": litepan.all_sources()}
 
 
 @app.get("/api/settings/token")

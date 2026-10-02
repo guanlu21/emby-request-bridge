@@ -64,6 +64,33 @@ def pick_best_file(files: list[dict], rules: Rules) -> dict:
     return max(files, key=key)
 
 
+def parse_terms(s: str) -> list[list[str]]:
+    """'国语|国配, 中字' → [['国语','国配'], ['中字']]（小写；一项里的 | 表示同义词）"""
+    return [[a.strip().lower() for a in t.split("|") if a.strip()]
+            for t in re.split(r"[,，;；\n]+", s or "") if t.strip()]
+
+
+def kw_reason(text: str, all_s: str = "", any_s: str = "", exclude_s: str = "") -> str:
+    """不满足自定义关键词条件时返回原因，满足返回空串。"""
+    t = (text or "").lower()
+    hit = lambda grp: any(a in t for a in grp)
+    for g in parse_terms(exclude_s):
+        if g and hit(g):
+            return f"含排除词「{g[0]}」"
+    for g in parse_terms(all_s):
+        if g and not hit(g):
+            return f"缺少「{g[0]}」"
+    anys = [g for g in parse_terms(any_s) if g]
+    if anys and not any(hit(g) for g in anys):
+        return "缺少关键词（" + "/".join(g[0] for g in anys) + "）"
+    return ""
+
+
+def kw_bonus(text: str, prefer_s: str = "") -> int:
+    t = (text or "").lower()
+    return min(sum(1 for g in parse_terms(prefer_s) if g and any(a in t for a in g)) * 8, 32)
+
+
 def norm(s: str) -> str:
     return re.sub(r"[\W_]+", "", s.lower())
 

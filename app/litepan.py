@@ -1,63 +1,124 @@
 """对接 LitePan「自动联动」：文件落进正式目录后，POST 一个第三方通知，由它的联动完成
-整理 → STRM → 元数据 → Emby 刷库。
+刷新目录 → STRM → 刮削 → Emby 扫库。
 
-接口（见 LitePan 文档「自动联动」）：
+接口（与 LitePan 联动页「第三方通知」弹窗里的「调用方式」一致）：
   POST {LitePan 地址}/api/open/automation/events
-  Authorization: Bearer lpk_api_xxx      # 系统设置 → API 秘钥 里创建「任务执行」型
-  {"event": "<联动里填的通知名称>", "message": "...", "source": "<可选来源>"}
+  Authorization: Bearer lpk_api_xxx      # 系统设置 → API 秘钥
+  {"event": "<通知名称>", "message": "...", "source": "<通知来源，可选>"}
+
+只处理新增文件所在的目录：「联动来源」里可以写 {category}，按分类（电影-国产、电视剧-国产剧、动漫…）
+发出不同的来源，在 LitePan 里为每个分类建一条联动，各自只扫对应目录。
 """
 import asyncio
+import json
 
 import httpx
 
-from . import db
+from . import classify, db
 from .config import cfg
 
-_timer = None
-_rids: set = set()
+ENDPOINT = "/api/open/automation/events"
+_timers: dict = {}
+_rids: dict = {}
+
+
+def _base() -> str:
+    u = (cfg.LITEPAN_URL or "").strip().rstrip("/")
+    if u.endswith(ENDPOINT):
+        u = u[: -len(ENDPOINT)]
+    return u if not u or "://" in u else "http://" + u
 
 
 def configured() -> bool:
     return bool(cfg.LITEPAN_URL and cfg.LITEPAN_KEY)
 
 
-async def send(event: str, message: str = "") -> tuple[bool, str]:
-    if not configured():
-        return False, "还没有配置 LitePan 地址和 API 秘钥"
+def source_for(category: str) -> str:
+    """联动来源模板里的 {category} 换成分类名；模板里没有 {category} 就所有分类用同一个来源。"""
+    return (cfg.LITEPAN_SOURCE or "").replace("{category}", category or "").strip("-")
+
+
+def all_sources() -> list[str]:
+    """当前设置下会用到的全部联动来源（给你在 LitePan 里逐个建联动时对照）。"""
+    cats = [[cfg.DIR_MOVIE, r] for r in classify.region_names()] + \
+           [[cfg.DIR_TV, r + cfg.TV_SUFFIX] for r in classify.region_names()] + \
+           [[cfg.DIR_ANIME], [cfg.DIR_VARIETY], [cfg.DIR_DOC]]
+    out = []
+    for c in cats:
+        s = source_for("-".join(c))
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def _body(event: str, message: str, source: str) -> dict:
     body = {"event": event, "message": message or f"{event}，请执行联动"}
-    if cfg.LITEPAN_SOURCE:
-        body["source"] = cfg.LITEPAN_SOURCE
+    if source:
+        body["source"] = source
+    return body
+
+
+def preview(event: str, source: str) -> dict:
+    url = _base() + ENDPOINT
+    body = _body(event, "", source)
+    curl = (f"curl -X POST '{url}' -H 'Authorization: Bearer 你的lpk_api_秘钥' -H 'Content-Type: application/json' "
+            f"-d '{json.dumps(body, ensure_ascii=False)}'")
+    return {"url": url, "body": body, "curl": curl}
+
+
+def hint(status: int, err: str) -> str:
+    if err:
+        if "Connect" in err or "Timeout" in err:
+            return ("连不上 LitePan：检查地址和端口是否正确。桥接服务在容器里，地址不能写 127.0.0.1，"
+                    "要写 NAS 的局域网 IP 加 LitePan 实际使用的端口")
+        return err
+    if status in (401, 403):
+        return "API 秘钥无效，或类型不对：需要「任务执行」型普通秘钥（lpk_api_ 开头）"
+    if status == 404:
+        return "接口不存在：地址/端口可能指到了别的服务，或 LitePan 版本不支持（需要联动页里能看到「第三方通知」）"
+    if 200 <= status < 300:
+        return ("LitePan 已接收通知。如果联动没有执行：核对 LitePan 联动里的「通知名称」和「通知来源」是否与上面请求里的一致，"
+                "以及联动是否已保存并启用")
+    return f"LitePan 返回 HTTP {status}"
+
+
+async def send_detail(event: str, message: str = "", source=None) -> dict:
+    src = cfg.LITEPAN_SOURCE if source is None else source
+    pv = preview(event, src)
+    if not configured():
+        return {"ok": False, "status": 0, "response": "", "hint": "还没有配置 LitePan 地址和 API 秘钥", **pv}
+    status, text, err = 0, "", ""
     try:
         async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(cfg.LITEPAN_URL.rstrip("/") + "/api/open/automation/events", json=body,
-                             headers={"Authorization": "Bearer " + cfg.LITEPAN_KEY})
+            r = await c.post(pv["url"], json=pv["body"], headers={"Authorization": "Bearer " + cfg.LITEPAN_KEY})
+        status, text = r.status_code, (r.text or "")[:300]
     except Exception as e:  # noqa
-        return False, f"连不上 LitePan：{type(e).__name__}"
-    if r.status_code in (401, 403):
-        return False, f"API 秘钥无效或类型不对（HTTP {r.status_code}）：需要「任务执行」型普通秘钥"
-    return 200 <= r.status_code < 300, f"HTTP {r.status_code} {r.text[:120]}".strip()
+        err = f"{type(e).__name__}"
+    return {"ok": 200 <= status < 300, "status": status, "response": text, "hint": hint(status, err), **pv}
 
 
-def schedule(rid: int):
-    """合并多次落盘：最后一个文件进目录后再等 LITEPAN_DELAY 秒，只发一次通知，免得整理到半截的文件。"""
-    global _timer
-    _rids.add(rid)
-    if _timer and not _timer.done():
-        _timer.cancel()
-    _timer = asyncio.create_task(_later())
+async def send(event: str, message: str = "", source=None) -> tuple[bool, str]:
+    d = await send_detail(event, message, source)
+    return d["ok"], (f"HTTP {d['status']} {d['response']}".strip() if d["ok"] else d["hint"])
 
 
-async def _later():
-    global _timer
+def schedule(rid: int, source: str):
+    """同来源的多次落盘合并成一次通知：最后一个文件进目录后再等 LITEPAN_DELAY 秒，免得整理到半截的文件。"""
+    _rids.setdefault(source, set()).add(rid)
+    t = _timers.get(source)
+    if t and not t.done():
+        t.cancel()
+    _timers[source] = asyncio.create_task(_later(source))
+
+
+async def _later(source: str):
     try:
         await asyncio.sleep(cfg.LITEPAN_DELAY)
     except asyncio.CancelledError:
         return
-    rids = sorted(_rids)
-    _rids.clear()
-    ok, info = await send(cfg.LITEPAN_EVENT)
-    src = cfg.LITEPAN_SOURCE or "未带来源"
+    rids = sorted(_rids.pop(source, set()))
+    d = await send_detail(cfg.LITEPAN_EVENT, source=source)
     for rid in rids:
-        db.log(rid, (f"已通知 LitePan 联动（事件 {cfg.LITEPAN_EVENT}，来源 {src}）：{info}。"
-                     "没有执行的话，检查 LitePan 联动里的通知名称和来源是否与此一致" if ok
-                     else f"通知 LitePan 失败：{info}"))
+        db.log(rid, (f"已通知 LitePan 联动（事件 {cfg.LITEPAN_EVENT}，来源 {source or '未带'}）：HTTP {d['status']} {d['response'][:80]}。"
+                     "没有执行的话，检查 LitePan 联动里的通知名称和来源是否与此一致" if d["ok"]
+                     else f"通知 LitePan 失败：{d['hint']}"))

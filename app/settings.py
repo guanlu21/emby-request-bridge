@@ -37,8 +37,9 @@ SCHEMA = [
     ]},
     {"group": "资源搜索", "fields": [
         F("pansou_url", "PanSou 地址", help="例如 http://192.168.1.10:8888；留空则不搜分享链接"),
-        F("prowlarr_url", "Prowlarr 地址", help="例如 http://192.168.1.10:9696；留空则不搜磁力"),
-        F("prowlarr_key", "Prowlarr API Key", "password"),
+        F("cloudsaver_url", "CloudSaver 地址", help="例如 http://192.168.1.10:8008；它从 Telegram 等频道搜 115 分享链接。留空则不用"),
+        F("cloudsaver_user", "CloudSaver 用户名"),
+        F("cloudsaver_pass", "CloudSaver 密码", "password"),
         F("kite_url", "纸鸢磁力 MCP 地址", help="例如 https://magnet.kiteyuan.info/mcp，以纸鸢磁力「MCP」页面客户端配置里的 url 为准。它会聚合你在纸鸢里配置的国内磁力站（包括自定义规则的站点）"),
         F("kite_token", "纸鸢磁力 MCP Token", "password", "在纸鸢磁力「MCP」页面生成（mcp__ 开头）"),
     ]},
@@ -63,6 +64,19 @@ SCHEMA = [
         F("prefer_max_gb", "偏好区间上限（GB）", "number", default=3),
         F("max_attempts", "每个请求最多尝试几个资源", "number", default=8),
         F("offline_timeout", "单个资源离线等待上限（秒）", "number", "磁力在 115 上一直下不完（死种）时，等这么久就换下一个；热门资源通常几分钟内完成", default=600),
+    ]},
+    {"group": "命名格式", "fields": [
+        F("name_movie_dir", "电影文件夹", help="可用变量：{title} 片名、{year} 年份、{tmdb} TMDB 编号。Emby 认 [tmdbid=编号]", default="{title} ({year}) [tmdbid={tmdb}]"),
+        F("name_movie_file", "电影文件", help="另可用 {res} 分辨率、{source} 片源（WEB-DL/BluRay…）、{codec} 编码（HEVC/H264…）。取不到的变量会自动省略", default="{title} ({year}) [tmdbid={tmdb}] - {res} {source} {codec}"),
+        F("name_tv_dir", "电视剧文件夹", default="{title} ({year}) [tmdbid={tmdb}]"),
+        F("name_season_dir", "季文件夹", help="可用 {season} 季号、{season2} 两位季号", default="Season {season2}"),
+        F("name_tv_file", "电视剧文件", help="可用 {ep} 集号、{ep2} 两位集号，以及上面的 {res} {source} {codec}。认不出集号的文件保留原名", default="{title} ({year}) - S{season2}E{ep2} - {res} {source} {codec}"),
+    ]},
+    {"group": "关键词筛选", "fields": [
+        F("kw_all", "必须全部包含", help="逗号分隔，每一项都必须出现在资源标题里。一项里可以用 | 写同义词，如：国语|国配|普通话, 中字|简中|中英字幕"),
+        F("kw_any", "至少包含其中一个", help="逗号分隔，命中任意一项即可，如：1080p, 2160p"),
+        F("kw_exclude", "不能包含", help="逗号分隔，命中任何一项就丢弃，如：枪版, 预告, 韩语, 日语"),
+        F("kw_prefer", "优先包含（加分）", help="逗号分隔，命中的越多排名越靠前，如：国语, 中字, 内封, 无水印"),
     ]},
     {"group": "代理与 TMDB", "fields": [
         F("proxy_enabled", "启用代理", "toggle", default=False),

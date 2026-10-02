@@ -27,6 +27,9 @@ def conn():
             title TEXT, status TEXT, picked TEXT DEFAULT '', error TEXT DEFAULT '',
             tried TEXT DEFAULT '[]', log TEXT DEFAULT '[]', created REAL, updated REAL)""")
         cols = [r[1] for r in _conn.execute("PRAGMA table_info(requests)")]
+        for col, ddl in (("cands", "TEXT DEFAULT '[]'"), ("placed", "TEXT DEFAULT ''"), ("category", "TEXT DEFAULT ''")):
+            if col not in cols:
+                _conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {ddl}")
         if "emby_user_id" not in cols:
             _conn.execute("ALTER TABLE requests ADD COLUMN emby_user_id TEXT DEFAULT ''")
         if "requester" not in cols:

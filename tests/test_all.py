@@ -235,13 +235,16 @@ class LitePanTest(unittest.TestCase):
         a = db.create("movie", 801, None, "A (2020)")
         b = db.create("movie", 802, None, "B (2021)")
 
+        c2 = db.create("movie", 803, None, "C (2022)")
+
         async def go():
-            litepan.schedule(a)
+            litepan.schedule(a, "Emby求片-电影-国产")
             await asyncio.sleep(0.02)
-            litepan.schedule(b)            # 窗口内再来一个：合并
-            await asyncio.sleep(0.25)
+            litepan.schedule(b, "Emby求片-电影-国产")     # 同来源窗口内再来一个：合并
+            litepan.schedule(c2, "Emby求片-电影-欧美")     # 不同来源：单独发一次
+            await asyncio.sleep(0.3)
         asyncio.run(go())
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(sorted(c[1]["source"] for c in calls), ["Emby求片-电影-国产", "Emby求片-电影-欧美"])
         self.assertIn("已通知 LitePan", db.get(a)["log"])
         self.assertIn("已通知 LitePan", db.get(b)["log"])
 
@@ -524,18 +527,76 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(classify("movie", {}), ["电影"])                                   # 没有 TMDB 信息
 
     def test_naming(self):
-        from app.classify import episode_of, target_name
+        from app.classify import episode_of, media_tags, render, target_name, vars_for
         self.assertEqual(episode_of("笑傲江湖.2001.E05.1080p.mkv"), 5)
         self.assertEqual(episode_of("Show.S01E12.1080p.WEB-DL.mkv"), 12)
         self.assertEqual(episode_of("笑傲江湖 第07集 4K.mp4"), 7)
         self.assertEqual(episode_of("[字幕组][09][1080P].mkv"), 9)
         self.assertEqual(episode_of("某剧 - 03 [WebRip 1080p].mkv"), 3)
         self.assertIsNone(episode_of("某剧.1080p.H264.mkv"))                              # 分辨率/编码里的数字不是集数
-        self.assertEqual(target_name("movie", "流浪地球", "2019", None, "x.2019.1080p.MKV", set()), "流浪地球 (2019).mkv")
+        self.assertEqual(media_tags("X.2019.2160p.BluRay.REMUX.HEVC"), {"res": "2160p", "source": "Remux", "codec": "HEVC"})
+        self.assertEqual(media_tags("X 1080p WEB-DL x264")["codec"], "H264")
+        meta = {"names": ["流浪地球"], "year": "2019"}
+        mv = {"media_type": "movie", "tmdb_id": 535167, "season": None}
+        self.assertEqual(render("{title} ({year}) [tmdbid={tmdb}]", vars_for(mv, meta)), "流浪地球 (2019) [tmdbid=535167]")
+        # 取不到的变量会省略，不留空括号/悬空的 -
+        self.assertEqual(render("{title} ({year}) [tmdbid={tmdb}] - {res} {source}", {"title": "X", "year": "", "tmdb": ""}), "X")
+        self.assertEqual(target_name(mv, meta, "流浪地球.2019.1080p.NF.WEB-DL.H265.mkv", "", set()),
+                         "流浪地球 (2019) [tmdbid=535167] - 1080p WEB-DL HEVC.mkv")
+        self.assertEqual(target_name(mv, meta, "abc.MKV", "[高清]流浪地球 2019 BluRay x264", set()),
+                         "流浪地球 (2019) [tmdbid=535167] - BluRay H264.mkv")                 # 文件名没有，就用资源标题里的
+        tv = {"media_type": "tv", "tmdb_id": 99, "season": 1}
+        tm = {"names": ["笑傲江湖"], "year": "2001"}
         used = set()
-        self.assertEqual(target_name("tv", "笑傲江湖", "2001", 1, "E05.mkv", used), "笑傲江湖 (2001) - S01E05.mkv")
-        self.assertIsNone(target_name("tv", "笑傲江湖", "2001", 1, "E05.2160p.mkv", used))   # 重复集数不改名
-        self.assertIsNone(target_name("tv", "笑傲江湖", "2001", 1, "无法识别.mkv", used))
+        self.assertEqual(target_name(tv, tm, "E05.1080p.mkv", "", used), "笑傲江湖 (2001) - S01E05 - 1080p.mkv")
+        self.assertIsNone(target_name(tv, tm, "E05.2160p.mkv", "", used))                    # 重复集数不改名
+        self.assertIsNone(target_name(tv, tm, "无法识别.mkv", "", used))
+
+    def test_keywords(self):
+        from app.filters import kw_bonus, kw_reason, parse_terms
+        self.assertEqual(parse_terms("国语|国配, 中字"), [["国语", "国配"], ["中字"]])
+        t = "流浪地球 2019 国配 1080p 简中字幕"
+        self.assertEqual(kw_reason(t, all_s="国语|国配, 中字|简中"), "")
+        self.assertIn("缺少「国语」", kw_reason("流浪地球 2019 1080p", all_s="国语|国配"))
+        self.assertIn("排除词", kw_reason(t, exclude_s="预告, 简中"))
+        self.assertIn("缺少关键词", kw_reason(t, any_s="2160p, 4k"))
+        self.assertEqual(kw_reason(t, any_s="2160p, 1080p"), "")
+        self.assertEqual(kw_bonus(t, "国语|国配, 中字, 内封"), 16)       # 国配、中字 各 8 分
+
+    def test_keywords_in_build_candidates(self):
+        from app.config import cfg
+        meta = {"names": ["流浪地球"], "year": "2019", "episodes": 0}
+        raw = [Candidate("magnet", "流浪地球 2019 1080p 国语中字", "magnet:?xt=urn:btih:" + "1" * 40, size=2 * GB),
+               Candidate("magnet", "流浪地球 2019 1080p 英语", "magnet:?xt=urn:btih:" + "2" * 40, size=2 * GB),
+               Candidate("share", "流浪地球 2019", "https://115.com/s/abc?password=x", text="国语 中字 无水印")]   # 正文里有关键词也算
+        cfg.KW_ALL = "国语|国配, 中字"
+        try:
+            rep = {}
+            out = build_candidates(raw, meta, "movie", None, R, rep)
+            self.assertEqual(len(out), 2)
+            self.assertEqual(sum(rep["counts"].values()), 1)
+        finally:
+            cfg.KW_ALL = ""
+
+    def test_split_year(self):
+        from app.tmdb import split_year
+        self.assertEqual(split_year("流浪地球 2019"), ("流浪地球", "2019"))
+        self.assertEqual(split_year("流浪地球(2019)"), ("流浪地球", "2019"))
+        self.assertEqual(split_year("Dune 2021"), ("Dune", "2021"))
+        self.assertEqual(split_year("2012"), ("2012", ""))                    # 片名本身是年份
+        self.assertEqual(split_year("流浪地球"), ("流浪地球", ""))
+
+    def test_cloudsaver_parse(self):
+        from app import cloudsaver
+        data = {"code": 0, "data": [{"id": "ch1", "list": [
+            {"title": "流浪地球 2019 国语中字", "content": "资源描述 提取码: ab12",
+             "cloudLinks": ["https://115.com/s/sw123abc?password=zz99", "https://pan.quark.cn/s/xxxx"]},
+            {"title": "流浪地球2", "content": "", "cloudLinks": [{"link": "https://115cdn.com/s/swxyz?password=q1w2", "cloudType": "pan115"}]},
+            {"title": "没有 115 链接", "cloudLinks": ["https://www.aliyundrive.com/s/abc"]}]}]}
+        r = cloudsaver.parse_results(data)
+        self.assertEqual([x["url"].split("?")[0] for x in r], ["https://115.com/s/sw123abc", "https://115cdn.com/s/swxyz"])
+        self.assertEqual(r[0]["password"], "zz99")
+        self.assertEqual(cloudsaver.find_token({"code": 0, "data": {"token": "T1"}}), "T1")
 
 
 class LibraryPathTest(unittest.TestCase):
@@ -569,10 +630,11 @@ class LibraryPathTest(unittest.TestCase):
         r = db.get(rid)
         self.assertEqual(r["status"], "done", r["log"])
         names = [k[1] for k in drive.tree]
-        self.assertEqual(names, ["电影", "国产", "流浪地球 (2019)"])                      # 影视/电影/国产/片名
-        self.assertEqual(drive.renames, [(1, "流浪地球 (2019).mkv")])
+        self.assertEqual(names, ["电影", "国产", "流浪地球 (2019) [tmdbid=980]"])              # 影视/电影/国产/片名 [tmdbid=…]
+        self.assertEqual(drive.renames, [(1, "流浪地球 (2019) [tmdbid=980] - 1080p WEB-DL.mkv")])
         self.assertEqual(drive.moved[0][0], [1])                                          # 只移动大于 100MB 的视频
-        self.assertIn("入库位置：电影 / 国产 / 流浪地球 (2019)", r["log"])
+        self.assertIn("入库位置：电影 / 国产 / 流浪地球 (2019) [tmdbid=980]", r["log"])
+        self.assertEqual(r["category"], "电影-国产")                                        # 联动来源按分类区分
         cfg.LIBRARY_ROOT_CID = 0
 
 
@@ -605,11 +667,101 @@ class LibraryTvTest(unittest.TestCase):
         asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
         r = db.get(rid)
         self.assertEqual(r["status"], "done", r["log"])
-        self.assertEqual([k[1] for k in drive.tree], ["电视剧", "国产剧", "笑傲江湖 (2001)", "Season 01"])
-        self.assertEqual(drive.renames, [(11, "笑傲江湖 (2001) - S01E01.mkv"), (12, "笑傲江湖 (2001) - S01E02.mkv"),
-                                         (13, "笑傲江湖 (2001) - S01E03.mkv")])
+        self.assertEqual([k[1] for k in drive.tree], ["电视剧", "国产剧", "笑傲江湖 (2001) [tmdbid=981]", "Season 01"])
+        self.assertEqual(drive.renames, [(11, "笑傲江湖 (2001) - S01E01 - 1080p.mkv"), (12, "笑傲江湖 (2001) - S01E02 - 1080p.mkv"),
+                                         (13, "笑傲江湖 (2001) - S01E03 - 1080p.mkv")])
         self.assertEqual(drive.moved[0][0], [11, 12, 13])
         cfg.LIBRARY_ROOT_CID = 0
+
+
+class ReplaceTest(unittest.TestCase):
+    def _setup(self, tmdb_id):
+        from app.config import cfg
+        cfg.LIBRARY_ROOT_CID = 5000
+        events = []
+
+        class D(FakeDrive):
+            def __init__(self):
+                super().__init__(); self.tree, self.cid, self.fail_offline, self.fid = {}, 8000, False, 100
+            async def ensure_dir(self, parent, name):
+                if (parent, name) not in self.tree:
+                    self.cid += 1; self.tree[(parent, name)] = self.cid
+                return self.tree[(parent, name)]
+            async def offline_state(self, h): return "failed" if self.fail_offline else "done"
+            async def list_files(self, cid):
+                self.fid += 1
+                return [{"id": self.fid, "name": "流浪地球.2019.1080p.mkv", "size": 3 * GB}]
+            async def rename(self, fid, new): events.append(("rename", fid))
+            async def delete(self, ids): events.append(("delete", tuple(ids)))
+            async def move(self, ids, dest): events.append(("move", tuple(ids)))
+        meta = {"names": ["流浪地球"], "year": "2019", "episodes": 0, "genres": [], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("magnet", "流浪地球 2019 1080p WEB-DL 国语", "magnet:?xt=urn:btih:" + "1" * 40, size=3 * GB, seeders=9),
+               Candidate("magnet", "流浪地球 2019 2160p BluRay 国语", "magnet:?xt=urn:btih:" + "2" * 40, size=4 * GB, seeders=3)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        drive = D()
+        return drive, events, Pipeline(drive, meta_fn, search_fn, after, poll=0), db.create("movie", tmdb_id, None, "流浪地球 (2019)")
+
+    def test_candidates_saved_and_replace_deletes_old_only_after_success(self):
+        import json
+        from app.config import cfg
+        drive, events, pl, rid = self._setup(990)
+        try:
+            asyncio.run(pl.run(rid))
+            r = db.get(rid)
+            self.assertEqual(r["status"], "done")
+            cands = json.loads(r["cands"])
+            self.assertEqual(len(cands), 2)                                    # 候选已保存，供「候选/替换」使用
+            placed = json.loads(r["placed"])
+            self.assertEqual(len(placed["files"]), 1)
+            old_file = placed["files"][0]
+            events.clear()
+            other = next(c for c in cands if c["title"] != r["picked"])
+            asyncio.run(pl.run_candidate(rid, other["url"], replace=True))
+            r = db.get(rid)
+            self.assertEqual((r["status"], r["picked"]), ("done", other["title"]))
+            kinds = [e[0] for e in events]
+            self.assertLess(kinds.index("delete"), kinds.index("move"))        # 先删旧文件，再放新文件（避免同名冲突）
+            self.assertIn(("delete", (old_file,)), events)
+            self.assertNotEqual(json.loads(r["placed"])["files"], placed["files"])
+        finally:
+            cfg.LIBRARY_ROOT_CID = 0
+
+    def test_failed_replacement_keeps_old_files(self):
+        import json
+        from app.config import cfg
+        drive, events, pl, rid = self._setup(991)
+        try:
+            asyncio.run(pl.run(rid))
+            cands = json.loads(db.get(rid)["cands"])
+            other = next(c for c in cands if c["title"] != db.get(rid)["picked"])
+            events.clear()
+            drive.fail_offline = True                                           # 新资源下载失败
+            asyncio.run(pl.run_candidate(rid, other["url"], replace=True))
+            r = db.get(rid)
+            self.assertEqual(r["status"], "done")                               # 状态不变，原资源还在
+            self.assertIn("原资源保留", r["error"])
+            self.assertNotIn("move", [e[0] for e in events])                    # 没有任何新文件被放进库
+        finally:
+            cfg.LIBRARY_ROOT_CID = 0
+
+
+class LitePanSourceTest(unittest.TestCase):
+    def test_source_per_category(self):
+        from app import litepan
+        from app.config import cfg
+        cfg.LITEPAN_SOURCE = "Emby求片-{category}"
+        self.assertEqual(litepan.source_for("电影-国产"), "Emby求片-电影-国产")
+        srcs = litepan.all_sources()
+        self.assertEqual(len(srcs), 11)                                         # 电影4 + 电视剧4 + 动漫/综艺/纪录片
+        self.assertIn("Emby求片-电视剧-国产剧", srcs); self.assertIn("Emby求片-动漫", srcs)
+        cfg.LITEPAN_SOURCE = "Emby求片"                                         # 没写 {category}：所有分类同一个来源
+        self.assertEqual(litepan.source_for("电影-国产"), "Emby求片")
+        self.assertEqual(litepan.all_sources(), ["Emby求片"])
+        cfg.LITEPAN_URL = "192.168.1.10:5211/api/open/automation/events"       # 粘贴了完整接口地址、没写 http:// 也能用
+        self.assertEqual(litepan.preview("e", "s")["url"], "http://192.168.1.10:5211/api/open/automation/events")
+        cfg.LITEPAN_SOURCE = "RequestBridge"
 
 
 class ApprovalTest(unittest.TestCase):

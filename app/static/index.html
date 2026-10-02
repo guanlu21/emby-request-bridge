@@ -3,11 +3,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>求片</title>
 <style>
-:root{--bg:#f3f5f9;--sf:#fff;--line:#dde2ec;--fg:#151a26;--mut:#6b7590;--ac:#2f5fd0;--acfg:#fff;--ok:#1a7f37;--bad:#c62828;--run:#2f5fd0;--warn:#a25f00}
+:root{--bg:#f3f5f9;--sf:#fff;--line:#dde2ec;--fg:#151a26;--mut:#6b7590;--ac:#2f5fd0;--acfg:#fff;--ok:#1a7f37;--bad:#c62828;--run:#2f5fd0;--warn:#a25f00;--hh:52px}
 @media(prefers-color-scheme:dark){:root{--bg:#10141c;--sf:#182030;--line:#27314a;--fg:#e6eaf2;--mut:#8a94aa;--ac:#6f9bff;--acfg:#0b1020;--ok:#4cc26b;--bad:#ef6a6a;--run:#6f9bff;--warn:#e0a13a}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "PingFang SC","Microsoft YaHei",system-ui,sans-serif}
-header{display:flex;align-items:center;gap:16px;padding:10px 20px;background:var(--sf);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-text-size-adjust:100%}
+header{display:flex;align-items:center;gap:16px;padding:0 20px;height:var(--hh);background:var(--sf);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
 header b{font-size:17px}nav{display:flex;gap:4px;flex:1}
 nav button{border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
 nav button.on{background:var(--bg);color:var(--fg);font-weight:600}
@@ -16,79 +16,145 @@ button,select,input{font:inherit;color:inherit}
 .btn{border:1px solid var(--line);background:var(--sf);border-radius:6px;padding:6px 14px;cursor:pointer}
 .btn.pri{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
 .btn:disabled{opacity:.55;cursor:default}
-input[type=text],input[type=password],select{border:1px solid var(--line);background:var(--sf);border-radius:6px;padding:8px 10px;width:100%}
+input[type=text],input[type=password],input[type=number],select{border:1px solid var(--line);background:var(--sf);border-radius:6px;padding:8px 10px;width:100%}
 :focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 .hide{display:none!important}
+small{color:var(--mut)}
 .login{max-width:340px;margin:12vh auto;display:grid;gap:12px}
 .login h2{margin:0 0 4px}
 .err{color:var(--bad);min-height:1.4em;font-size:14px}
-.sbar{display:flex;gap:8px;margin-bottom:18px}
+/* 搜索 */
+.sbar{display:flex;gap:8px;padding:4px 0 14px;position:sticky;top:var(--hh);background:var(--bg);z-index:4}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px}
 .card{display:flex;flex-direction:column;gap:6px}
-.poster{aspect-ratio:2/3;background:var(--line);border-radius:6px;overflow:hidden;position:relative}
+.poster{aspect-ratio:2/3;background:var(--line);border-radius:8px;overflow:hidden;position:relative}
 .poster img{width:100%;height:100%;object-fit:cover;display:block}
 .tag{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;padding:1px 7px;border-radius:4px}
-.card h4{margin:0;font-size:14px;line-height:1.3}.card small{color:var(--mut)}
-.card .btn{width:100%;padding:5px}
+.card h4{margin:0;font-size:14px;line-height:1.3}
+.card .btn{width:100%;padding:6px}
 .empty{color:var(--mut);padding:40px 0;text-align:center}
+/* 列表（桌面是表格，手机变卡片） */
 .wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:500}
+.pill{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;border:1px solid currentColor;line-height:20px}
 .s-done{color:var(--ok)}.s-failed,.s-rejected{color:var(--bad)}.s-searching,.s-downloading,.s-queued{color:var(--run)}.s-pending{color:var(--warn)}
-small{color:var(--mut)}details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut);font:12px/1.5 inherit}
+details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut);font:12px/1.5 inherit}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}.bar select{width:auto}
-.form{display:grid;gap:14px;max-width:640px}
-.form h3{margin:14px 0 0;font-size:15px;padding-top:12px;border-top:1px solid var(--line)}
-.form h3:first-child{border-top:0;padding-top:0}
-.row>div small{display:block;margin-top:3px}
+.acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+/* 设置：左侧分类导航 + 右侧一组一页 */
+.setwrap{display:grid;grid-template-columns:190px minmax(0,1fr);gap:28px;align-items:start}
+#setnav{position:sticky;top:calc(var(--hh) + 14px);display:grid;gap:2px}
+#setnav .cat{font-size:12px;color:var(--mut);margin:14px 10px 4px}
+#setnav .cat:first-child{margin-top:0}
+#setnav button{text-align:left;border:0;background:none;padding:8px 10px;border-radius:6px;cursor:pointer}
+#setnav button:hover{background:var(--sf)}
+#setnav button.on{background:var(--sf);font-weight:600;box-shadow:inset 3px 0 var(--ac)}
+.panel{display:none;max-width:680px}.panel.on{display:block}
+.panel h3{margin:0 0 2px;font-size:17px}
+.panel .gd{margin:0 0 14px;color:var(--mut);font-size:13px}
+.row{display:grid;grid-template-columns:170px minmax(0,1fr);gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
+.row>span{padding-top:8px}
+.row>div small{display:block;margin-top:4px}
+.gres{white-space:pre-wrap;word-break:break-all;font:12px/1.5 ui-monospace,monospace;color:var(--mut);margin:12px 0 0}
+.savebar{position:sticky;bottom:0;display:flex;gap:10px;align-items:center;padding:12px 0;margin-top:18px;background:var(--bg);border-top:1px solid var(--line);z-index:3}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;background:var(--sf);padding:7px 18px;cursor:pointer}.seg button.on{background:var(--ac);color:var(--acfg)}
+code{word-break:break-all}
+/* 弹窗 */
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--sf);color:var(--fg);padding:20px;max-width:400px;width:92%}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+dialog label{display:flex;gap:8px;padding:6px 0}
+.crow{display:flex;gap:10px;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.crow b{font-weight:500;word-break:break-all}
 #qrbox{background:#fff;padding:12px;border-radius:8px;width:fit-content;margin:10px auto;color:#000}
 #qrbox svg{display:block;width:220px;height:220px}
 #flist{display:grid;gap:4px;max-height:260px;overflow:auto;margin:10px 0}
 #flist .btn{text-align:left}
-code{word-break:break-all}
-.row{display:grid;grid-template-columns:170px 1fr;gap:10px;align-items:center}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
-.seg button{border:0;background:var(--sf);padding:6px 18px;cursor:pointer}.seg button.on{background:var(--ac);color:var(--acfg)}
-dialog{border:1px solid var(--line);border-radius:10px;background:var(--sf);color:var(--fg);padding:20px;max-width:380px;width:92%}
-dialog::backdrop{background:rgba(0,0,0,.5)}
-dialog label{display:flex;gap:8px;padding:5px 0}
-#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50;max-width:90vw}
 #toast.on{opacity:.95}
-@media(max-width:560px){.row{grid-template-columns:1fr}main{padding:14px}}
 @media(prefers-reduced-motion:reduce){#toast{transition:none}}
+
+/* ===== 手机 ===== */
+@media(max-width:700px){
+  :root{--hh:48px}
+  header{padding:0 14px;gap:10px}
+  header b{flex:1}
+  #who{display:none}
+  /* 主导航挪到底部，拇指够得着 */
+  nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--sf);border-top:1px solid var(--line);
+      padding:4px 4px calc(4px + env(safe-area-inset-bottom));gap:0;flex:none}
+  nav button{flex:1;padding:10px 2px;font-size:13px;border-radius:8px}
+  main{padding:12px 14px calc(72px + env(safe-area-inset-bottom))}
+  #toast{bottom:calc(84px + env(safe-area-inset-bottom))}
+  input,select,.btn{font-size:16px}
+  .btn{min-height:40px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  /* 表格 → 卡片 */
+  .rt thead{display:none}
+  .rt,.rt tbody,.rt tr,.rt td{display:block;width:100%}
+  .rt tr{position:relative;background:var(--sf);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+  .rt td{border:0;padding:3px 0}
+  .rt td[data-l]::before{content:attr(data-l);color:var(--mut);margin-right:8px;font-size:13px}
+  .rt td.t{font-weight:600;padding-right:34px}
+  .rt td.ck{position:absolute;top:10px;right:12px;width:auto}
+  .rt td.ck input{width:22px;height:22px}
+  .rt td.op{display:flex;flex-wrap:wrap;gap:8px;padding-top:8px}
+  .bar select{flex:1 1 42%}
+  .bar .btn{flex:1 1 28%;padding:6px 4px}
+  /* 设置：分类导航变成可横向滑动的标签 */
+  .setwrap{grid-template-columns:minmax(0,1fr);gap:8px}
+  #setnav{position:sticky;top:var(--hh);z-index:6;display:flex;overflow-x:auto;gap:6px;padding:8px 0;background:var(--bg);scrollbar-width:none}
+  #setnav::-webkit-scrollbar{display:none}
+  #setnav .cat{display:none}
+  #setnav button{flex:none;white-space:nowrap;border:1px solid var(--line);background:var(--sf);border-radius:999px;padding:6px 14px;box-shadow:none!important}
+  #setnav button.on{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+  .row{grid-template-columns:minmax(0,1fr);gap:4px}
+  .row>span{padding-top:0;font-size:14px}
+  .savebar{bottom:calc(58px + env(safe-area-inset-bottom))}
+  .savebar .btn{flex:1}
+  dialog{width:calc(100% - 20px)!important;max-width:none!important;max-height:88vh;overflow:auto;padding:16px}
+  .crow{flex-direction:column;align-items:stretch}
+}
 </style></head><body>
+
 <header id="hd" class="hide"><b>求片</b>
   <nav id="nav"></nav><small id="who"></small><button class="btn" onclick="logout()">退出</button></header>
 <main>
 <section id="v-login" class="login hide">
   <h2>登录求片</h2><small>使用你的 Emby 用户名和密码</small>
-  <div id="lsetup" class="hide" style="display:grid;gap:8px"><input id="eurl" type="text" placeholder="Emby 地址，如 http://192.168.1.10:8096">
+  <div id="lsetup" class="hide" style="display:grid;gap:8px"><input id="eurl" type="text" placeholder="Emby 地址，如 http://192.168.1.10:8096" autocapitalize="off">
     <small>首次使用：请用 Emby 管理员账号登录，它会成为本站管理员。</small></div>
-  <input id="u" type="text" placeholder="用户名" autocomplete="username">
+  <input id="u" type="text" placeholder="用户名" autocomplete="username" autocapitalize="off">
   <input id="p" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key=='Enter')login()">
   <div class="err" id="lerr"></div>
   <button class="btn pri" onclick="login()">登录</button>
 </section>
 
 <section id="v-search" class="hide">
-  <div class="sbar"><input id="q" type="text" placeholder="输入影片或剧集名称" onkeydown="if(event.key=='Enter')search()">
+  <div class="sbar"><input id="q" type="text" placeholder="影片或剧集名称，可加年份，如：流浪地球 2019" enterkeyhint="search" onkeydown="if(event.key=='Enter')search()">
     <button class="btn pri" onclick="search()" style="white-space:nowrap">搜索</button></div>
   <div id="grid" class="grid"></div><div id="sempty" class="empty">搜索后选择一部影片，点「求片」即可。</div>
 </section>
 
-<section id="v-mine" class="hide"><div class="wrap"><table><thead><tr><th>片名</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="mine"></tbody></table></div>
+<section id="v-mine" class="hide"><div class="wrap"><table class="rt"><thead><tr><th>片名</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="mine"></tbody></table></div>
   <div id="mempty" class="empty hide">还没有求过片。</div></section>
 
 <section id="v-admin" class="hide">
   <div class="bar">
     <select id="flt" onchange="renderAdmin()"><option value="">全部状态</option><option value="pending">待审批</option><option value="active">进行中</option><option value="failed">失败</option><option value="done">已完成</option><option value="rejected">已拒绝</option></select>
     <select id="usr" onchange="renderAdmin()"><option value="">所有用户</option></select>
+    <button class="btn" onclick="selAll()">全选/取消</button>
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button>
-    <small id="cnt"></small></div>
-  <div class="wrap"><table><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  </div>
+  <small id="cnt"></small>
+  <div class="wrap" style="margin-top:8px"><table class="rt"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 
-<section id="v-set" class="hide"><div class="form" id="setform"></div></section>
+<section id="v-set" class="hide">
+  <div class="setwrap"><nav id="setnav" aria-label="设置分类"></nav><div id="setpanels"></div></div>
+  <div class="savebar"><button class="btn pri" onclick="saveSet()">保存设置</button><small id="savemsg"></small></div>
+</section>
 </main>
 
 <dialog id="dlg"><h3 id="dt" style="margin-top:0"></h3><div id="dseasons"></div>
@@ -96,16 +162,20 @@ dialog label{display:flex;gap:8px;padding:5px 0}
 <dialog id="qdlg"><h3 style="margin-top:0">扫码授权 115</h3><div id="qrbox"></div>
   <small id="qst">请用 115 手机 App 扫码并确认</small>
   <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="QPOLL=false;$('qdlg').close()">关闭</button></div></dialog>
+<dialog id="cdlg" style="max-width:640px"><h3 id="ct" style="margin-top:0"></h3><small id="chint"></small><div id="clist" style="max-height:60vh;overflow:auto;margin:10px 0"></div>
+  <div style="display:flex;justify-content:flex-end"><button class="btn" onclick="$('cdlg').close()">关闭</button></div></dialog>
 <dialog id="fdlg"><h3 style="margin-top:0">选择 115 目录</h3><small id="fpath"></small><div id="flist"></div>
   <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="fup()">上一级</button><button class="btn" onclick="$('fdlg').close()">取消</button><button class="btn pri" onclick="fchoose()">选择当前目录</button></div></dialog>
 <div id="toast" role="status"></div>
 
 <script>
+
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const NAME={pending:'待审批',queued:'排队中',searching:'搜索中',downloading:'下载中',done:'已完成',failed:'失败',rejected:'已拒绝'};
 const BUSY=['queued','searching','downloading'];
-let me=null,items=[],data=[],sel=new Set(),proxyOn=false,timer=null;
+const pill=s=>`<span class="pill s-${s}">${NAME[s]||s}</span>`;
+let me=null,items=[],data=[],sel=new Set(),timer=null;
 
 async function api(path,opt={}){
   const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opt,body:opt.body?JSON.stringify(opt.body):undefined});
@@ -114,7 +184,7 @@ async function api(path,opt={}){
   if(!r.ok)throw new Error(d.detail||('请求失败 '+r.status));
   return d;
 }
-function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2600)}
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2800)}
 function view(v){
   ['login','search','mine','admin','set'].forEach(x=>$('v-'+x).classList.toggle('hide',x!=v));
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v==v));
@@ -123,11 +193,13 @@ function view(v){
   if(v=='admin'){loadAdmin();timer=setInterval(loadAdmin,6000)}
   if(v=='set')loadSet();
   if(v=='search')$('q').focus();
+  window.scrollTo(0,0);
 }
 async function showLogin(){
   me=null;$('hd').classList.add('hide');view('login');
   try{const s=await (await fetch('/api/status')).json();$('lsetup').classList.toggle('hide',s.configured)}catch(e){}
 }
+
 async function start(){
   try{me=await api('/api/me')}catch(e){return showLogin()}
   $('hd').classList.remove('hide');$('who').textContent=me.name+(me.admin?'（管理员）':'');
@@ -181,12 +253,14 @@ async function send(x,seasons){
   }catch(e){toast(e.message)}
 }
 
+
+
 /* ---- 我的请求 ---- */
 async function loadMine(){
   const d=await api('/api/requests');
   $('mempty').classList.toggle('hide',d.length>0);
-  $('mine').innerHTML=d.map(x=>`<tr><td>${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}</td>
-    <td class="s-${x.status}">${NAME[x.status]||x.status}<br><small>${esc(x.error)}</small></td><td><small>${esc(x.picked)}</small></td></tr>`).join('');
+  $('mine').innerHTML=d.map(x=>`<tr><td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}</td>
+    <td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td></tr>`).join('');
 }
 
 /* ---- 管理 ---- */
@@ -202,18 +276,38 @@ function shown(){
 }
 function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
-  $('rows').innerHTML=d.map(x=>`<tr><td><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
-  <td>${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
-  <td>${esc(x.requester)||'<small>-</small>'}</td><td class="s-${x.status}">${NAME[x.status]||x.status}<br><small>${esc(x.error)}</small></td><td><small>${esc(x.picked)}</small></td>
-  <td>${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
+  $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
+  <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
+  <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
+  <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
+}
+
+let CANDS=[],CSTAT='',CID=0;
+async function showCands(id){
+  let d;try{d=await api(`/api/requests/${id}/candidates`)}catch(e){return toast(e.message)}
+  CANDS=d.candidates;CSTAT=d.status;CID=id;
+  $('ct').textContent=d.title+' 的候选资源';
+  $('chint').textContent=d.status=='done'?'选一个替换：新资源下载并通过筛选后，才会删除当前已入库的文件；新资源失败则保留原文件。':'选一个来用。';
+  $('clist').innerHTML=CANDS.length?CANDS.map((c,i)=>`<div class="crow"><div><b>${esc(c.title)}</b><br><small>${c.kind=='share'?'115 分享':'磁力'} · ${esc(c.src)} · 分 ${c.score}${c.size?' · '+(c.size/1073741824).toFixed(1)+' GB':''}${c.state?' · '+esc(c.state):''}</small></div>
+    <button class="btn" ${c.state=='当前使用'?'disabled':''} onclick="useCand(${i})">${CSTAT=='done'?'替换为此资源':'使用此资源'}</button></div>`).join('')
+    :'<small>这条请求还没有候选记录：点「重新搜索」后会生成。</small>';
+  $('cdlg').showModal();
+}
+async function useCand(i){
+  const c=CANDS[i];
+  if(CSTAT=='done'&&!confirm(`替换为：\n${c.title}\n\n新资源下载成功后，会删除当前已入库的文件。继续？`))return;
+  try{await api(`/api/requests/${CID}/replace`,{method:'POST',body:{url:c.url}});$('cdlg').close();toast('已开始处理，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
 }
 async function manual(id){
   const url=prompt('粘贴 115 分享链接或磁力链接，将跳过搜索直接处理这一条：');
   if(!url)return;
   try{await api(`/api/requests/${id}/manual`,{method:'POST',body:{url}});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
 }
+
+
 function pick(id,on){on?sel.add(id):sel.delete(id);$('cnt').textContent=`共 ${shown().length} 条，已选 ${sel.size} 条`}
 function toggleAll(on){shown().forEach(x=>on?sel.add(x.id):sel.delete(x.id));renderAdmin()}
+function selAll(){const d=shown();toggleAll(!d.every(x=>sel.has(x.id)))}
 async function batch(action){
   if(!sel.size)return toast('先勾选要处理的请求');
   if(action=='delete'&&!confirm('确定删除选中的记录？'))return;
@@ -221,8 +315,20 @@ async function batch(action){
   toast(`已处理 ${r.done.length} 条`);sel.clear();$('all').checked=false;loadAdmin();
 }
 
-/* ---- 设置（按后端 schema 渲染） ---- */
-let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false;
+
+/* ---- 设置：按类别分组，一次只显示一组 ---- */
+let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false,ACTIVE='';
+const CATS=[['连接',['Emby','115 网盘','资源搜索','代理与 TMDB']],['入库',['入库分类','命名格式','LitePan 联动']],['规则',['选源规则','关键词筛选','审批与限额']]];
+const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115 分享链接）和纸鸢磁力（磁力）。',
+  '代理与 TMDB':'TMDB 搜索和海报用的代理与接口地址。','入库分类':'下载完成后按 TMDB 信息自动放进哪些目录。','命名格式':'文件夹和文件的命名模板，默认带 TMDB 编号。',
+  'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。'};
+const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
+    <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
+    <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
+  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
+  '代理与 TMDB':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testSet()">测试 TMDB 连通性</button></div>`,
+  'LitePan 联动':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testLp()">测试连接</button><button class="btn" onclick="triggerLp()">手动触发联动</button><button class="btn" onclick="showSources()">联动来源清单</button></div>`};
+
 function fieldHtml(f,d){
   const v=d.values[f.key],id='f_'+f.key;let inp='';
   if(f.type=='toggle')inp=`<div class="seg" id="${id}"><button data-v="1" class="${v?'on':''}" onclick="segSet(this)">开启</button><button data-v="0" class="${v?'':'on'}" onclick="segSet(this)">关闭</button></div>`;
@@ -230,20 +336,40 @@ function fieldHtml(f,d){
   else if(f.type=='folder'){const lb=d.values[f.key.replace('_cid','_label')];FOLDER[f.key]={cid:v||0,label:lb||''};
     inp=`<div style="display:flex;gap:8px"><input id="${id}" type="text" readonly placeholder="未选择" value="${esc(lb||(v?'目录 '+v:''))}"><button class="btn" onclick="pickFolder('${f.key}')">选择</button></div>`}
   else if(f.type=='password')inp=`<input id="${id}" type="password" autocomplete="new-password" placeholder="${d.secret_set[f.key]?'已配置；留空不修改':''}">`;
-  else inp=`<input id="${id}" type="${f.type=='number'?'number':'text'}" ${f.type=='number'?'step="any"':''} value="${esc(v)}">`;
+  else inp=`<input id="${id}" type="${f.type=='number'?'number':'text'}" ${f.type=='number'?'step="any" inputmode="decimal"':'autocapitalize="off"'} value="${esc(v)}">`;
   return `<div class="row"><span>${esc(f.label)}</span><div>${inp}${f.help?`<small>${esc(f.help)}</small>`:''}</div></div>`;
 }
 function segSet(b){b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x==b))}
-async function loadSet(){
-  const d=await api('/api/settings');SET=d;FOLDER={};let h='';
-  for(const g of d.schema){
-    h+=`<h3>${esc(g.group)}</h3>`+g.fields.map(f=>fieldHtml(f,d)).join('');
-    if(g.group=='115 网盘')h+=`<div class="row"><span>115 授权</span><div><span id="p115st">检查中…</span> <button class="btn" onclick="p115Test()">测试 115 连接</button> <button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button> <button class="btn" onclick="p115Out()">取消授权</button><small>只填 Cookie 就能用；有 AppID 再扫码授权，授权后优先走开放平台。选目录、授权前会自动保存当前设置。</small></div></div>`;
-  }
-  h+=`<h3>API 令牌</h3><div class="row"><span>脚本 / emby-manager 用</span><div><button class="btn" onclick="showTok()">显示令牌</button> <button class="btn" onclick="resetTok()">重新生成</button><small><code id="tokv"></code></small></div></div>`;
-  h+=`<div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn pri" onclick="saveSet()">保存设置</button><button class="btn" onclick="testSet()">测试 TMDB</button><button class="btn" onclick="testLp()">测试 LitePan</button><button class="btn" onclick="triggerLp()">手动触发联动</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button><small id="tres"></small></div>`;
-  $('setform').innerHTML=h;p115Refresh();
+function panel(name,body){
+  return `<div class="panel" data-g="${esc(name)}"><h3>${esc(name)}</h3><p class="gd">${esc(GDESC[name]||'')}</p>${body}<pre class="gres"></pre></div>`;
 }
+async function loadSet(){
+  const d=await api('/api/settings');SET=d;FOLDER={};
+  const by={};d.schema.forEach(g=>by[g.group]=g);
+  const used=new Set();let nav='',panels='';
+  const add=(name,body)=>{panels+=panel(name,body);nav+=`<button data-g="${esc(name)}" onclick="showGroup('${esc(name)}')">${esc(name)}</button>`};
+  for(const [cat,names] of CATS){
+    const have=names.filter(n=>by[n]);if(!have.length)continue;
+    nav+=`<div class="cat">${cat}</div>`;
+    for(const n of have){used.add(n);add(n,by[n].fields.map(f=>fieldHtml(f,d)).join('')+(ACTS[n]||''))}
+  }
+  const rest=d.schema.filter(g=>!used.has(g.group));
+  if(rest.length)nav+=`<div class="cat">其它</div>`;
+  rest.forEach(g=>add(g.group,g.fields.map(f=>fieldHtml(f,d)).join('')+(ACTS[g.group]||'')));
+  nav+=`<div class="cat">安全</div>`;
+  add('API 令牌',`<div class="row"><span>令牌</span><div><div class="acts"><button class="btn" onclick="showTok()">显示令牌</button><button class="btn" onclick="resetTok()">重新生成</button></div><small><code id="tokv"></code></small></div></div>`);
+  $('setnav').innerHTML=nav;$('setpanels').innerHTML=panels;
+  let first='';try{first=sessionStorage.getItem('setg')||''}catch(e){}
+  showGroup(ACTIVE&&document.querySelector(`.panel[data-g="${CSS.escape(ACTIVE)}"]`)?ACTIVE:(first&&document.querySelector(`.panel[data-g="${CSS.escape(first)}"]`)?first:Object.keys(by)[0]));
+  p115Refresh();
+}
+function showGroup(g){
+  ACTIVE=g;try{sessionStorage.setItem('setg',g)}catch(e){}
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.dataset.g==g));
+  document.querySelectorAll('#setnav button').forEach(b=>b.classList.toggle('on',b.dataset.g==g));
+  const b=document.querySelector(`#setnav button[data-g="${CSS.escape(g)}"]`);if(b&&b.scrollIntoView)b.scrollIntoView({block:'nearest',inline:'center'});
+}
+function out(msg){const el=document.querySelector('.panel.on .gres');if(el)el.textContent=msg}
 function collect(){
   const o={};
   for(const g of SET.schema)for(const f of g.fields){
@@ -255,34 +381,38 @@ function collect(){
   return o;
 }
 async function saveSet(silent){
-  try{await api('/api/settings',{method:'PUT',body:collect()});if(!silent){toast('设置已保存');loadSet()}}catch(e){toast(e.message)}
+  try{await api('/api/settings',{method:'PUT',body:collect()});if(!silent){toast('设置已保存');loadSet()}return true}
+  catch(e){toast(e.message);return false}
 }
-async function testSet(){
-  await saveSet(true);$('tres').textContent='测试中…';
-  try{const r=await api('/api/settings/test',{method:'POST'});$('tres').textContent=r.ok?`连接正常（${r.ms} ms）`:'失败：'+r.error}catch(e){$('tres').textContent=e.message}
+async function runTest(path,fmt,wait){
+  if(!await saveSet(true))return;
+  out(wait||'测试中…');
+  try{out(fmt(await api(path,{method:'POST'})))}catch(e){out(e.message)}
 }
-async function testLp(){
-  await saveSet(true);$('tres').textContent='测试中…';
-  try{const r=await api('/api/settings/litepan/test',{method:'POST'});$('tres').textContent=(r.ok?'LitePan 连接正常：':'失败：')+r.info}catch(e){$('tres').textContent=e.message}
-}
+const testSet=()=>runTest('/api/settings/test',r=>r.ok?`TMDB 连接正常（${r.ms} ms）`:'失败：'+r.error);
+const testCs=()=>runTest('/api/settings/cloudsaver/test',r=>r.ok?`CloudSaver 连接正常：试搜「流浪地球」得到 ${r.count} 条 115 链接${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error,'测试中…（CloudSaver 搜索可能要十几秒）');
+const testKite=()=>runTest('/api/settings/kite/test',r=>r.ok?`纸鸢磁力连接正常：工具 ${r.tools.join('、')||'（无）'}；试搜「流浪地球」${r.sample_count} 条${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error);
+const lpText=r=>`${r.ok?'LitePan 返回成功':'失败'}\n${r.hint}\n\n请求：POST ${r.url}\n${JSON.stringify(r.body)}\n返回：HTTP ${r.status} ${r.response||''}\n\n用终端自己试（把秘钥换成真实的）：\n${r.curl}`;
+const testLp=()=>runTest('/api/settings/litepan/test',lpText);
 async function triggerLp(){
-  if(!confirm('会真的发一条联动通知，LitePan 将执行联动里配置的动作（刷新目录、STRM、刮削、Emby 扫库）。继续？'))return;
-  await saveSet(true);$('tres').textContent='发送中…';
-  try{const r=await api('/api/settings/litepan/trigger',{method:'POST'});
-    $('tres').textContent=(r.ok?'已发送：':'失败：')+r.info+`（事件 ${r.event}，来源 ${r.source||'未带'}）；请到 LitePan 看联动有没有执行`}
-  catch(e){$('tres').textContent=e.message}
+  if(!await saveSet(true))return;
+  let list;try{list=await api('/api/settings/litepan/sources')}catch(e){return toast(e.message)}
+  const cat=prompt('要触发哪个分类的联动？填分类名（会按「联动来源」模板生成来源）。\n可选：'+list.sources.join('、'),'电影-国产');
+  if(cat===null)return;
+  if(!confirm('会真的发一条联动通知，LitePan 将执行对应联动里的动作。继续？'))return;
+  out('发送中…');
+  try{out(lpText(await api('/api/settings/litepan/trigger',{method:'POST',body:{category:cat}})))}catch(e){out(e.message)}
 }
-async function testKite(){
-  await saveSet(true);$('tres').textContent='测试中…';
-  try{const r=await api('/api/settings/kite/test',{method:'POST'});
-    $('tres').textContent=r.ok?`纸鸢磁力连接正常：工具 ${r.tools.join('、')||'（无）'}；试搜「流浪地球」${r.sample_count} 条${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error}
-  catch(e){$('tres').textContent=e.message}
+async function showSources(){
+  try{const d=await api('/api/settings/litepan/sources');
+    out(`LitePan 里每个分类建一条联动：触发 = 收到通知「${d.event}」，来源如下（一条联动对应一个来源，STRM 任务只扫对应目录）：\n\n`+d.sources.join('\n'))}catch(e){out(e.message)}
 }
-async function showTok(){$('tokv').textContent=(await api('/api/settings/token')).token}
+async function showTok(){try{$('tokv').textContent=(await api('/api/settings/token')).token}catch(e){toast(e.message)}}
 async function resetTok(){
   if(!confirm('重新生成后，所有人需要重新登录，使用旧令牌的脚本也要更新。继续？'))return;
   await api('/api/settings/token/reset',{method:'POST'});toast('已重新生成，请重新登录');showLogin();
 }
+
 /* 115 目录选择 */
 async function pickFolder(key){await saveSet(true);FKEY=key;FSTACK=[{id:0,name:'根目录'}];$('fdlg').showModal();await fload()}
 async function fload(){
@@ -297,8 +427,22 @@ function fchoose(){
   const cur=FSTACK[FSTACK.length-1],label=FSTACK.slice(1).map(x=>x.name).join('/')||'根目录';
   FOLDER[FKEY]={cid:cur.id,label};$('f_'+FKEY).value=label;$('fdlg').close();
 }
+
+
+/* 115 状态与测试 */
+async function p115Refresh(){
+  const el=$('p115st');if(!el)return;
+  try{const s=await api('/api/p115/status');el.textContent={open:'已授权（开放平台）',cookie:'使用 Cookie 登录',none:'未登录'}[s.mode]||'未登录'}catch(e){}
+}
+async function p115Test(){
+  if(!await saveSet(true))return;
+  out('测试中…');
+  try{const r=await api('/api/p115/test',{method:'POST'});
+    out(r.ok?`115 连接正常（${r.mode=='open'?'开放平台':'Cookie'}），根目录下有 ${r.root_dirs} 个文件夹`:'失败：'+r.error)}catch(e){out(e.message)}
+  p115Refresh();
+}
+
 /* 115 扫码授权 */
-async function p115Refresh(){try{const s=await api('/api/p115/status');X}catch(e){}}
 async function p115Auth(){
   await saveSet(true);
   try{

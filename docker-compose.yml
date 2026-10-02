@@ -1,10 +1,9 @@
 services:
-  prowlarr:                    # 磁力/种子站聚合，在网页里添加站点
-    image: lscr.io/linuxserver/prowlarr:latest
-    container_name: prowlarr
-    environment: [PUID=1000, PGID=1000, TZ=Asia/Shanghai]
-    ports: ["9696:9696"]
-    volumes: ["./data/prowlarr:/config"]
+  cloudsaver:                  # 从 Telegram 等频道搜 115 分享链接（首次打开需注册账号，注册码请查它的文档并尽快修改默认值）
+    image: jiangrui1994/cloudsaver:latest
+    container_name: cloud-saver
+    ports: ["8008:8008"]
+    volumes: ["./data/cloudsaver/data:/app/data", "./data/cloudsaver/config:/app/config"]
     restart: unless-stopped
 
   pansou:                      # 网盘分享链接搜索（115 + 磁力）
@@ -18,5 +17,5 @@ services:
     container_name: request-bridge
     ports: ["8686:8686"]
     volumes: ["./data/bridge:/data"]
-    depends_on: [prowlarr, pansou]
+    depends_on: [cloudsaver, pansou]
     restart: unless-stopped

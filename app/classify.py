@@ -61,9 +61,47 @@ def classify(media_type: str, meta: dict) -> list[str]:
     return [cfg.DIR_MOVIE, region] if media_type == "movie" else [cfg.DIR_TV, region + cfg.TV_SUFFIX]
 
 
-# ---------------------------------------------------------------- 文件命名
+# ---------------------------------------------------------------- 命名
 def sanitize(s: str) -> str:
-    return re.sub(r'[\\/:*?"<>|]+', " ", s).strip()
+    return re.sub(r'[\\/:*?"<>|]+', " ", str(s)).strip()
+
+
+SRC_PATTERNS = [(re.compile(r"(?i)remux"), "Remux"), (re.compile(r"(?i)blu-?ray|bdrip|bd-?rip"), "BluRay"),
+                (re.compile(r"(?i)web-?dl"), "WEB-DL"), (re.compile(r"(?i)webrip"), "WEBRip"), (re.compile(r"(?i)hdtv"), "HDTV")]
+CODEC_PATTERNS = [(re.compile(r"(?i)x265|h\.?265|hevc"), "HEVC"), (re.compile(r"(?i)x264|h\.?264|avc"), "H264"),
+                  (re.compile(r"(?i)(?<![a-z])av1(?![a-z0-9])"), "AV1")]
+
+
+def media_tags(text: str) -> dict:
+    """从文件名/资源标题里提取分辨率、片源、编码，用于命名模板。"""
+    from .filters import parse_resolution
+    res = parse_resolution(text or "")
+    out = {"res": f"{res}p" if res else "", "source": "", "codec": ""}
+    for pat, name in SRC_PATTERNS:
+        if pat.search(text or ""):
+            out["source"] = name
+            break
+    for pat, name in CODEC_PATTERNS:
+        if pat.search(text or ""):
+            out["codec"] = name
+            break
+    return out
+
+
+def vars_for(r: dict, meta: dict) -> dict:
+    s = r.get("season") or 0
+    return {"title": sanitize(meta["names"][0]), "year": str(meta.get("year") or ""), "tmdb": str(r.get("tmdb_id") or ""),
+            "season": str(s) if s else "", "season2": f"{s:02d}" if s else ""}
+
+
+def render(tpl: str, v: dict) -> str:
+    """套用命名模板：取不到的变量省略，并清理由此留下的空括号、悬空的 - 和多余空格。"""
+    s = re.sub(r"\{(\w+)\}", lambda m: sanitize(v.get(m.group(1), "")), tpl)
+    s = re.sub(r"\(\s*\)|\[\s*\]|\[[^\]\[=]*=\s*\]", "", s)
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"(?:\s*-\s*)+$", "", s)
+    s = re.sub(r"\s-(?:\s-)+\s", " - ", s)
+    return s.strip()
 
 
 EP_PATTERNS = [
@@ -83,14 +121,21 @@ def episode_of(name: str):
     return None
 
 
-def target_name(media_type: str, title: str, year, season, name: str, used: set):
-    """返回新文件名；认不出集数（电视剧）或不需要改名时返回 None。"""
-    ext = os.path.splitext(name)[1].lower()
-    base = f"{sanitize(title)} ({year})" if year else sanitize(title)
-    if media_type == "movie":
-        return base + ext
-    ep = episode_of(name)
-    if ep is None or ep in used or not season:
-        return None
-    used.add(ep)
-    return f"{base} - S{int(season):02d}E{ep:02d}{ext}"
+def target_name(r: dict, meta: dict, file_name: str, hint: str, used: set):
+    """返回新文件名；电视剧认不出集数/集数重复，或模板渲染为空时返回 None（保留原名）。"""
+    from .config import cfg
+    ext = os.path.splitext(file_name)[1].lower()
+    v = vars_for(r, meta)
+    tags = media_tags(file_name)
+    hint_tags = media_tags(hint)
+    v.update({k: tags[k] or hint_tags[k] for k in tags})
+    if r["media_type"] == "movie":
+        base = render(cfg.NAME_MOVIE_FILE, v)
+    else:
+        ep = episode_of(file_name)
+        if ep is None or ep in used or not r.get("season"):
+            return None
+        used.add(ep)
+        v.update({"ep": str(ep), "ep2": f"{ep:02d}"})
+        base = render(cfg.NAME_TV_FILE, v)
+    return base + ext if base else None
