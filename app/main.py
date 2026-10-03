@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import auth as auth_mod, cloudsaver, db, drive115, emby, kite, litepan, settings, tmdb
 from .config import cfg
@@ -22,7 +23,7 @@ pipe: Pipeline | None = None
 
 
 async def _meta(r):
-    m = await tmdb_meta(r["media_type"], r["tmdb_id"], r["season"])
+    m = await tmdb_meta(r["media_type"], r["tmdb_id"], r.get("seasons") or r["season"])
     if not m:
         title = re.sub(r"\s*\(\d{4}\)\s*$", "", r["title"])
         y = re.search(r"\((\d{4})\)\s*$", r["title"])
@@ -40,12 +41,13 @@ def spawn(rid):
 async def lifespan(app):
     global pipe
     pipe = Pipeline(drive115.CompositeDrive(), _meta, search_all, notify_after)
-    for rid in db.unfinished():  # 重启后继续未完成的请求
+    for rid in db.leaders(db.unfinished()):  # 重启后继续未完成的请求（电视剧一次求多季的算一组）
         spawn(rid)
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, title="Emby求片")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 
 def who(request: Request, x_token: str = "") -> dict:
@@ -166,10 +168,14 @@ async def make_request(request: Request, x_token: str = Header("")):
         rid = db.create(mt, tid, s, title, u["name"], status, u["uid"])
         if rid:
             ids.append(rid)
-            if status == "queued":
-                spawn(rid)
         else:
             dup += 1
+    if mt == "tv" and len(ids) > 1:  # 一次求多季：同一组，一起搜索、优先找覆盖多季的合集
+        for i in ids:
+            db.update(i, grp=ids[0])
+    if status == "queued":
+        for rid in db.leaders(ids):
+            spawn(rid)
     return {"created": ids, "duplicates": dup, "status": status}
 
 
@@ -189,7 +195,7 @@ async def batch(request: Request, x_token: str = Header("")):
         raise HTTPException(400, "bad action")
     done = db.batch(body.get("ids", []), action)
     if action in ("approve", "retry", "reset"):
-        for rid in done:
+        for rid in db.leaders(done):
             spawn(rid)
     return {"done": done}
 
@@ -207,7 +213,7 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
 
 @app.get("/api/requests/{rid}/candidates")
 def candidates(rid: int, request: Request, x_token: str = Header("")):
-    """这条请求筛选出的候选资源（含已试过、当前使用的状态），用于一键替换。"""
+    """这条请求筛选出的候选资源（含满足的要求、已试过/当前使用的状态）和被过滤掉的资源（可强制使用）。"""
     admin(request, x_token)
     r = db.get(rid)
     if not r:
@@ -218,7 +224,28 @@ def candidates(rid: int, request: Request, x_token: str = Header("")):
         c["state"] = "当前使用" if (r["status"] == "done" and c["title"] == r["picked"]) else ("已试过" if c["url"] in tried else "")
         c.pop("password", None)
         out.append(c)
-    return {"title": r["title"], "status": r["status"], "picked": r["picked"], "candidates": out}
+    rej = []
+    for c in json.loads(r["rejects"] or "[]"):
+        c.pop("password", None)
+        rej.append(c)
+    return {"title": r["title"], "season": r["season"], "status": r["status"], "picked": r["picked"],
+            "candidates": out, "rejects": rej, "ver": r["cands_at"], "busy": rid in pipe._active}
+
+
+@app.post("/api/requests/{rid}/research")
+async def research(rid: int, request: Request, x_token: str = Header("")):
+    """用更深的搜索（更多关键词、更多条数、不用缓存）重新找一遍，只刷新候选列表，不下载。"""
+    admin(request, x_token)
+    r = db.get(rid)
+    if not r:
+        raise HTTPException(404)
+    if rid in pipe._active or r["status"] in ("searching", "downloading"):
+        raise HTTPException(400, "这条请求正在处理中")
+    depth = int((await request.json()).get("depth") or 3)
+    t = asyncio.create_task(pipe.search_only(rid, max(1, min(3, depth))))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"ok": True, "ver": r["cands_at"]}
 
 
 @app.post("/api/requests/{rid}/replace")
@@ -228,7 +255,7 @@ async def replace(rid: int, request: Request, x_token: str = Header("")):
     r = db.get(rid)
     if not r:
         raise HTTPException(404)
-    if r["status"] not in ("done", "failed"):
+    if r["status"] not in ("done", "failed") or rid in pipe._active:
         raise HTTPException(400, "这条请求还在处理中，等它结束后再替换")
     url = ((await request.json()).get("url") or "").strip()
     if not url:
@@ -462,11 +489,30 @@ async def seerr_webhook(req: Request, token: str = ""):
         else:
             rid = db.promote(mt, tid, s) if status == "queued" else None
             rid = rid or db.create(mt, tid, s, p.get("subject", ""), name, status, uid)
-            if rid and status == "queued":
-                spawn(rid)
         if rid:
             ids.append(rid)
+    if ok and mt == "tv" and len(ids) > 1:
+        for i in ids:
+            db.update(i, grp=ids[0])
+    if ok and status == "queued":
+        for rid in db.leaders(ids):
+            spawn(rid)
     return {"created": ids, "status": status if ok else "rejected", "reason": why}
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    """让手机浏览器可以「添加到主屏幕」，像个独立的 App。"""
+    return JSONResponse({"name": "Emby求片", "short_name": "Emby求片", "start_url": "/", "display": "standalone",
+                         "background_color": "#10141c", "theme_color": "#182030",
+                         "icons": [{"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                                   {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}]},
+                        media_type="application/manifest+json")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(Path(__file__).parent / "static" / "icon-64.png", media_type="image/png")
 
 
 @app.get("/")

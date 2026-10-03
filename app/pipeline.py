@@ -1,4 +1,4 @@
-"""求片主流程：搜索 → 逐个候选尝试（失败自动换下一个）→ 过滤文件 → 移入正式目录 → 通知入库。"""
+"""Emby求片 · 求片主流程：搜索 → 逐个候选尝试（失败自动换下一个）→ 过滤文件 → 移入正式目录 → 通知入库。"""
 import asyncio
 import json
 import time
@@ -8,7 +8,8 @@ import httpx
 from . import db, litepan
 from .config import cfg
 from . import classify
-from .filters import Rules, pick_best_file, select_files
+from .filters import Rules, assign_seasons, pick_best_file, select_files
+from . import sources
 from .sources import Candidate, build_candidates, parse_115_share
 
 
@@ -18,12 +19,12 @@ class SetupError(Exception):
 
 def cand_dict(c: Candidate) -> dict:
     return {"title": c.title, "kind": c.kind, "src": c.src, "score": c.score, "url": c.url,
-            "password": c.password, "size": c.size, "seeders": c.seeders}
+            "password": c.password, "size": c.size, "seeders": c.seeders, "covers": c.covers, "tags": c.tags}
 
 
 def cand_from(d: dict) -> Candidate:
     return Candidate(d["kind"], d["title"], d["url"], d.get("password", ""), d.get("size", 0), d.get("seeders", 0),
-                     d.get("src", ""), score=d.get("score", 0))
+                     d.get("src", ""), score=d.get("score", 0), covers=d.get("covers", []), tags=d.get("tags", []))
 
 
 def rules() -> Rules:
@@ -34,59 +35,143 @@ def rules() -> Rules:
 class Pipeline:
     def __init__(self, drive, meta_fn, search_fn, after_fn, poll=None):
         self._dest_lock = asyncio.Lock()
+        self._active = set()
         self.drive, self.meta_fn, self.search_fn, self.after_fn = drive, meta_fn, search_fn, after_fn
         self.poll = cfg.POLL_SECONDS if poll is None else poll
 
-    async def run(self, rid: int):
+    # ------------------------------------------------------------ 一组请求（电视剧一次求多季共用一组）
+    @staticmethod
+    def _rows_for(r) -> list:
+        """要一起处理的请求：电视剧一次求多季时，同组里还在排队/处理中的各季；其它情况就是它自己。"""
+        if r["media_type"] == "tv" and r.get("grp"):
+            rows = [x for x in db.group_rows(r["grp"]) if x["status"] in ("queued", "searching", "downloading")]
+            if rows:
+                return rows
+        return [r]
+
+    @staticmethod
+    def _log_all(rows, msg):
+        for x in rows:
+            db.log(x["id"], msg)
+
+    async def run(self, rid: int, depth: int = 0):
         r = db.get(rid)
+        if not r:
+            return
+        rows = self._rows_for(r)
+        ids = [x["id"] for x in rows]
+        if any(i in self._active for i in ids):  # 同一组正在处理
+            return
+        self._active.update(ids)
+        token = sources.DEPTH.set(depth) if depth else None
+        try:
+            await self._run_rows(rows)
+        finally:
+            self._active.difference_update(ids)
+            if token is not None:
+                sources.DEPTH.reset(token)
+
+    def _fail_all(self, rows, msg):
+        for x in rows:
+            if db.get(x["id"])["status"] != "done":
+                db.update(x["id"], status="failed", error=msg[:200])
+
+    async def _meta_for(self, rows):
+        r = dict(rows[0])
+        r["seasons"] = [x["season"] for x in rows if x["season"]]
+        return await self.meta_fn(r)
+
+    async def _search_build(self, rows, meta):
+        """搜索 + 过滤 + 排序（电视剧一次搜，按覆盖的季数优先）。返回 (原始结果, 候选, 过滤报告, 说明)。"""
+        r = rows[0]
+        seasons = [x["season"] for x in rows] if r["media_type"] == "tv" else None
+        res = await self.search_fn(meta, r["media_type"], seasons)
+        raw, notes = res if isinstance(res, tuple) else (res, [])
+        report = {}
+        built = build_candidates(raw, meta, r["media_type"], seasons, rules(), report)
+        return raw, built, report, notes
+
+    def _save_cands(self, rows, built, report):
+        data = json.dumps([cand_dict(c) for c in built[:150]], ensure_ascii=False)
+        rej = json.dumps(report.get("rejects", []), ensure_ascii=False)
+        for x in rows:
+            db.update(x["id"], cands=data, rejects=rej, cands_at=time.time())
+
+    async def _run_rows(self, rows):
+        r = rows[0]
         try:
             if not cfg.P115_STAGING_CID or not self._library_cid(r):
                 raise RuntimeError("还没有设置 115 的下载目录和「影视根目录」，请管理员到「设置 → 115 网盘 / 入库分类」里选择")
             await self.preflight(r)
-            db.update(rid, status="searching", error="")
-            meta = await self.meta_fn(r)
-            res = await self.search_fn(meta, r["media_type"], r["season"])
-            raw, notes = res if isinstance(res, tuple) else (res, [])
+            for x in rows:
+                db.update(x["id"], status="searching", error="")
+            meta = await self._meta_for(rows)
+            raw, built, report, notes = await self._search_build(rows, meta)
             for n in notes:
-                db.log(rid, f"提示：{n}")
+                self._log_all(rows, f"提示：{n}")
             tried = set(json.loads(r["tried"]))
-            report = {}
-            built = build_candidates(raw, meta, r["media_type"], r["season"], rules(), report)
-            db.update(rid, cands=json.dumps([cand_dict(c) for c in built[:40]], ensure_ascii=False))
+            self._save_cands(rows, built, report)
             cands = [c for c in built if c.url not in tried]
             if report.get("counts"):
-                db.log(rid, "过滤掉：" + "、".join(f"{k} {v}" for k, v in report["counts"].most_common()))
+                self._log_all(rows, "过滤掉：" + "、".join(f"{k} {v}" for k, v in report["counts"].most_common()))
                 if not cands:
                     for sm in report["samples"]:
-                        db.log(rid, "例：" + sm)
+                        self._log_all(rows, "例：" + sm)
             if not getattr(self.drive, "can_receive_share", lambda: True)():
                 n = len(cands)
                 cands = [c for c in cands if c.kind != "share"]
                 if n != len(cands):
-                    db.log(rid, f"未配置 115 Cookie，跳过 {n - len(cands)} 个分享链接，只用磁力")
-            db.log(rid, f"搜到 {len(raw)} 条，过滤后 {len(cands)} 个候选")
-            db.update(rid, status="downloading")
+                    self._log_all(rows, f"未配置 115 Cookie，跳过 {n - len(cands)} 个分享链接，只用磁力")
+            self._log_all(rows, f"搜到 {len(raw)} 条，过滤后 {len(cands)} 个候选")
+            for x in rows:
+                db.update(x["id"], status="downloading")
+            remaining = {x["season"]: x for x in rows}
             for n, c in enumerate(cands[:cfg.MAX_ATTEMPTS], 1):
-                db.log(rid, f"尝试 {n}: [{c.kind}/{c.src}] {c.title[:60]} (分 {c.score})")
+                if not remaining:
+                    break
+                want = [remaining[s] for s in remaining if r["media_type"] == "movie" or s in c.covers]
+                if not want:
+                    continue
+                cover = "（覆盖第 " + "、".join(str(x["season"]) for x in want) + " 季）" if r["media_type"] == "tv" else ""
+                self._log_all(want, f"尝试 {n}: [{c.kind}/{c.src}] {c.title[:60]} (分 {c.score}){cover}")
                 try:
-                    ok = await self.attempt(r, meta, c)
+                    placed = await self.attempt_group(want, meta, c)
                 except SetupError as e:
-                    db.log(rid, str(e))
-                    db.update(rid, status="failed", error=str(e)[:200])
+                    self._log_all(rows, str(e))
+                    self._fail_all(list(remaining.values()), str(e))
                     return
                 tried.add(c.url)
-                db.update(rid, tried=json.dumps(sorted(tried)))
-                if ok:
-                    db.update(rid, status="done", picked=c.title)
-                    await self.after_fn(r)
-                    return
-            db.update(rid, status="failed", error="所有候选均失败或没有符合条件的资源")
+                for x in rows:
+                    db.update(x["id"], tried=json.dumps(sorted(tried)))
+                for s in placed:
+                    row = remaining.pop(s)
+                    db.update(row["id"], status="done", picked=c.title)
+                    await self.after_fn(row)
+            self._fail_all(list(remaining.values()), "所有候选均失败或没有符合条件的资源")
         except SetupError as e:
-            db.log(rid, str(e))
-            db.update(rid, status="failed", error=str(e)[:200])
+            self._log_all(rows, str(e))
+            self._fail_all(rows, str(e))
         except Exception as e:  # noqa
-            db.log(rid, f"异常: {e!r}")
-            db.update(rid, status="failed", error=str(e)[:200])
+            self._log_all(rows, f"异常: {e!r}")
+            self._fail_all(rows, str(e))
+
+    async def search_only(self, rid: int, depth: int = 3):
+        """只搜索、刷新候选列表（不下载）：候选里没有想要的时，用更深的搜索再找一遍，再由你挑。"""
+        r = db.get(rid)
+        token = sources.DEPTH.set(depth)
+        try:
+            db.log(rid, f"开始搜索深度 {depth} 的重新搜索（只刷新候选，不会下载）")
+            meta = await self._meta_for([r])
+            raw, built, report, notes = await self._search_build([r], meta)
+            for n in notes:
+                db.log(rid, f"提示：{n}")
+            self._save_cands([r], built, report)
+            db.log(rid, f"重新搜索完成：{len(built)} 个候选，{sum(report.get('counts', {}).values())} 个被过滤")
+        except Exception as e:  # noqa
+            db.log(rid, f"重新搜索失败: {e!r}")
+            db.update(rid, cands_at=time.time())
+        finally:
+            sources.DEPTH.reset(token)
 
     @staticmethod
     def _library_cid(r) -> int:
@@ -121,9 +206,11 @@ class Pipeline:
             await self.preflight(r)
             meta = await self.meta_fn(r)
             url = url.strip()
-            known = next((d for d in json.loads(r["cands"] or "[]") if d["url"] == url), None)
+            known = next((d for d in json.loads(r["cands"] or "[]") + json.loads(r["rejects"] or "[]") if d["url"] == url), None)
             if known:
                 c = cand_from(known)
+                if r["media_type"] == "tv" and r["season"] not in c.covers:
+                    c.covers = list(c.covers) + [r["season"]]
             elif url.startswith("magnet:"):
                 c = Candidate("magnet", "手动指定", url, src="manual")
             elif parse_115_share(url):
@@ -203,9 +290,15 @@ class Pipeline:
             db.log(rid, f"已按命名格式重命名 {done} 个文件")
 
     async def attempt(self, r, meta, c, replace_old=None) -> bool:
-        rid, stage = r["id"], None
+        return bool(await self.attempt_group([r], meta, c, replace_old))
+
+    async def attempt_group(self, rows, meta, c, replace_old=None) -> set:
+        """下载一个资源，并分给 rows 里的各个请求（电视剧一次求多季时，一个合集按季分到各自的 Season 目录）。
+        返回已入库的季集合（电影是 {None}）；这个资源没用上返回空集合。"""
+        r0 = rows[0]
+        rid0, stage = r0["id"], None
         try:
-            stage = await self.drive.mkdir(cfg.P115_STAGING_CID, f"req{rid}-{int(time.time())}")
+            stage = await self.drive.mkdir(cfg.P115_STAGING_CID, f"req{rid0}-{int(time.time())}")
         except Exception as e:  # noqa
             raise SetupError(f"无法在 115 暂存目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择暂存目录")
         try:
@@ -225,28 +318,53 @@ class Pipeline:
             keep, drop = select_files(await self.drive.list_files(stage), rules())
             if not keep:
                 raise RuntimeError("没有符合条件的视频文件（非视频/太小/太大/分辨率不足）")
-            if r["media_type"] == "movie" and len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
-                best = pick_best_file(keep, rules())
-                drop += [f for f in keep if f is not best]
-                keep = [best]
-            db.log(rid, f"保留 {len(keep)} 个视频，丢弃 {len(drop)} 个文件")
-            try:
-                dest = await self.dest_dir(r, meta)
-            except Exception as e:  # noqa
-                raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
-            if replace_old:
-                await self.remove_placed(rid, replace_old, dest)
-            await self.rename_files(rid, keep, r, meta, c.title)
-            await self.drive.move([f["id"] for f in keep], dest)
-            db.update(rid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in keep]}))
-            return True
+            plan = []  # [(请求, 它的文件)]
+            if r0["media_type"] == "movie":
+                if len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
+                    best = pick_best_file(keep, rules())
+                    drop += [f for f in keep if f is not best]
+                    keep = [best]
+                plan = [(r0, keep)]
+            else:
+                by = assign_seasons(keep, [x["season"] for x in rows], c.title)
+                if not by:
+                    raise RuntimeError("无法判断这些文件属于哪一季（文件名和文件夹名里都没有季信息）")
+                for x in rows:
+                    fl = by.get(x["season"])
+                    if not fl:
+                        db.log(x["id"], f"这个资源里没有第 {x['season']} 季的文件")
+                        continue
+                    eps = meta.get("season_eps", {}).get(x["season"]) or meta.get("episodes", 0)
+                    if eps >= 4 and len(fl) < max(2, eps // 3):  # 疑似只是单集或残缺的包
+                        db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，应有约 {eps} 集，疑似不是整季，跳过")
+                        continue
+                    plan.append((x, fl))
+                if len(by) > 1 or len(rows) > 1:
+                    self._log_all(rows, "合集：" + "、".join(f"第{s}季 {len(fl)} 个" for s, fl in sorted(by.items())))
+                if not plan:
+                    raise RuntimeError("这个资源里没有哪一季的视频数量够（疑似单集或残缺的包）")
+            placed = set()
+            for x, fl in plan:
+                xid = x["id"]
+                db.log(xid, f"保留 {len(fl)} 个视频，丢弃 {len(keep) - len(fl) + len(drop)} 个文件")
+                try:
+                    dest = await self.dest_dir(x, meta)
+                except Exception as e:  # noqa
+                    raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
+                if replace_old and len(rows) == 1:
+                    await self.remove_placed(xid, replace_old, dest)
+                await self.rename_files(xid, fl, x, meta, c.title)
+                await self.drive.move([f["id"] for f in fl], dest)
+                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl]}))
+                placed.add(x["season"])
+            return placed
         except SetupError:
             raise
         except AttributeError as e:  # 方法不存在：是程序和 115 库版本不匹配，换资源也没用
             raise SetupError(f"程序与 115 客户端库版本不匹配：{e}")
         except Exception as e:  # noqa
-            db.log(rid, f"失败，换下一个: {e}")
-            return False
+            self._log_all(rows, f"失败，换下一个: {e}")
+            return set()
         finally:
             if stage:
                 try:

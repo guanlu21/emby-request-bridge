@@ -29,6 +29,8 @@ class _Env:
 
     KITE_URL = os.environ.get("KITE_URL", "")
     KITE_TOKEN = os.environ.get("KITE_TOKEN", "")
+    KITE_EXCLUDE = os.environ.get("KITE_EXCLUDE", "综合匹配,快速搜索")
+    KITE_ENGINE = os.environ.get("KITE_ENGINE", "")
 
     LIBRARY_ROOT_CID = _i("LIBRARY_ROOT_CID", 0)
     DIR_MOVIE = os.environ.get("DIR_MOVIE", "电影")
@@ -69,6 +71,8 @@ class _Env:
     KW_ANY = os.environ.get("KW_ANY", "")
     KW_EXCLUDE = os.environ.get("KW_EXCLUDE", "")
     KW_PREFER = os.environ.get("KW_PREFER", "")
+    SEARCH_DEPTH = _i("SEARCH_DEPTH", 2)
+    PRIORITY = os.environ.get("PRIORITY", "year,quality,keywords,size,source,seeders")
     MAX_ATTEMPTS = _i("MAX_ATTEMPTS", 8)
     OFFLINE_TIMEOUT = _i("OFFLINE_TIMEOUT_SECONDS", 600)
     POLL_SECONDS = _i("POLL_SECONDS", 20)

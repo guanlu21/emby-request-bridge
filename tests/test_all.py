@@ -280,19 +280,33 @@ class CookieOnlyTest(unittest.TestCase):
 
 
 class MatchingTest(unittest.TestCase):
-    def test_looser_matching(self):
-        from app.filters import match_reason
-        # 英文片名标点不同、词序不同
-        self.assertEqual(match_reason("Part.Two.Dune.2024.1080p", ["Dune: Part Two"], "2024", "movie", None), "")
-        # 副标题不写
-        self.assertEqual(match_reason("沙丘 2024 4K 中字", ["沙丘：第二部"], "2024", "movie", None), "")
-        # 年份 ±1 可以，差太多不行，没写年份可以
-        self.assertEqual(match_reason("Movie.2023.1080p", ["Movie"], "2024", "movie", None), "")
-        self.assertEqual(match_reason("Movie.2019.1080p", ["Movie"], "2024", "movie", None), "年份不符")
-        self.assertEqual(match_reason("Movie.1080p", ["Movie"], "2024", "movie", None), "")
+    def test_strict_name_and_year(self):
+        from app.filters import match_reason, year_rank
+        mr = lambda t, names, y="2015", mt="movie", ss=None: match_reason(t, names, y, mt, ss)
+        n = ["唐人街探案", "Detective Chinatown"]
+        self.assertEqual(mr("唐人街探案.2015.1080p.国语中字", n), "")
+        self.assertEqual(mr("Detective.Chinatown.2015.1080p", n), "")
+        self.assertEqual(mr("【高清】唐人街 探案 (2015) 1080P", n), "")              # 空格/标点不影响
+        # 名称不能拆开：只含「唐人街」或「探案」的不算
+        self.assertEqual(mr("唐人街之探案.2015.1080p", n), "标题不匹配")
+        self.assertEqual(mr("唐人街.2015.1080p", n), "标题不匹配")
+        self.assertEqual(mr("警察探案 唐人街 2015", n), "标题不匹配")
+        # 英文名也要完整、按顺序：不分词、不乱序
+        self.assertEqual(mr("Part.Two.Dune.2024.1080p", ["Dune: Part Two"], "2024"), "标题不匹配")
+        self.assertEqual(mr("Dune.Part.Two.2024.1080p", ["Dune: Part Two"], "2024"), "")
+        # 不去副标题
+        self.assertEqual(mr("沙丘 2024 4K 中字", ["沙丘：第二部"], "2024"), "标题不匹配")
+        # 续集不算（片名后面紧跟数字）
+        self.assertEqual(mr("唐人街探案2.2018.1080p", n), "标题不匹配")
+        self.assertEqual(mr("唐人街探案 3 2021", n), "标题不匹配")
+        # 年份是辅助条件：同年、差一年、没写年份都行；差太多不行
+        self.assertEqual(mr("唐人街探案.2015.1080p", n), "")
+        self.assertEqual(mr("唐人街探案.2016.1080p", n), "")
+        self.assertEqual(mr("唐人街探案.1080p.国语", n), "")
+        self.assertEqual(mr("唐人街探案.2012.1080p", n), "年份不符")
+        self.assertEqual([year_rank(t, n, "2015") for t in ("唐人街探案 2015", "唐人街探案 2014", "唐人街探案")], [2, 1, 0])
         # 片名本身带数字
-        self.assertEqual(match_reason("1917.2019.1080p", ["1917"], "2019", "movie", None), "")
-        self.assertEqual(match_reason("完全无关 2024", ["Dune"], "2024", "movie", None), "标题不匹配")
+        self.assertEqual(mr("1917.2019.1080p", ["1917"], "2019"), "")
 
     def test_sequels_and_hdtc(self):
         from app.filters import match_reason, BAD_TAGS
@@ -313,7 +327,36 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(match_reason("笑傲江湖.2001.E01-E40.1080p", n, "2001", "tv", 1), "")
         self.assertEqual(match_reason("Show S01E01-E10 1080p", ["Show"], "2020", "tv", 1), "")
         self.assertEqual(match_reason("Show S01E05 1080p", ["Show"], "2020", "tv", 1), "只有单集")
-        self.assertNotEqual(match_reason("笑傲江湖 合集", n, "2001", "tv", 1), "")                    # 含糊的"合集"不收
+        self.assertEqual(match_reason("笑傲江湖 合集", n, "2001", "tv", 1), "")                       # 第 1 季：没写季/集数的标题也收，下载后再核对文件
+
+    def test_multi_season_and_bare_titles(self):
+        from app.filters import filter_season, match_reason, season_span, verify_season, single_episode_only
+        n = ["我的兄弟叫顺溜"]
+        # 用户日志里被误拒的几种写法：没写季/没写年份，都应该收（第 1 季）
+        for t in ("【高清剧集网发布 www.PTHDTV.com】我的兄弟叫顺溜[高码版][全26集][国语配音+中文字幕]",
+                  "[我的兄弟叫顺溜][26集][战争剧][2009][mkv]", "我的兄弟叫顺溜", "[a6a5.com][国产剧][我的兄弟叫顺溜][全26集][国语中字]"):
+            self.assertEqual(match_reason(t, n, "2009", "tv", 1), "", t)
+        self.assertEqual(match_reason("我的兄弟叫顺溜 第5集", n, "2009", "tv", 1), "只有单集")
+        self.assertEqual(match_reason("我的兄弟叫顺溜 EP05", n, "2009", "tv", 1), "只有单集")
+        # 多季合集：请求的季在范围内就收
+        g = ["权力的游戏"]
+        self.assertEqual(season_span("权力的游戏 第一季至第三季"), (1, 3))
+        self.assertEqual(season_span("权力的游戏 全8季"), (1, 8))
+        self.assertEqual(season_span("Show 第二季 全集"), (2, 2))               # 第二季 + 全集，不是 2 季合集
+        for t, s in (("权力的游戏 S01-S08 1080p", 3), ("权力的游戏 第1-8季 全集", 5), ("权力的游戏 全8季", 8)):
+            self.assertEqual(match_reason(t, g, "2011", "tv", s), "", t)
+        self.assertEqual(match_reason("权力的游戏 S01-S03", g, "2011", "tv", 5), "季不在合集范围内")
+        # 第 2 季以后，标题没写季：只收「全集/合集」，不收「全40集」（那是单季集数）
+        self.assertEqual(match_reason("某剧 全集", ["某剧"], "2010", "tv", 2), "")
+        self.assertNotEqual(match_reason("某剧 全40集", ["某剧"], "2010", "tv", 2), "")
+        # 下载后：只留请求的这一季；没法确认属于哪一季就不要
+        fl = [{"id": 1, "name": "E01.mkv", "path": "权游/S01/E01.mkv"}, {"id": 2, "name": "E01.mkv", "path": "权游/S02/E01.mkv"},
+              {"id": 3, "name": "x.mkv", "path": "权游/第二季/x.mkv"}, {"id": 4, "name": "y.mkv", "path": "y.mkv"}]
+        keep, drop = filter_season(fl, 2)
+        self.assertEqual(([f["id"] for f in keep], [f["id"] for f in drop]), ([2, 3], [1, 4]))
+        self.assertTrue(verify_season(keep, 2, "权力的游戏 全集"))
+        self.assertFalse(verify_season([{"id": 9, "name": "E01.mkv", "path": "E01.mkv"}], 2, "某剧 全集"))
+        self.assertTrue(verify_season([{"id": 9, "name": "E01.mkv", "path": "E01.mkv"}], 1, "某剧"))
 
     def test_report(self):
         from collections import Counter
@@ -658,8 +701,8 @@ class LibraryTvTest(unittest.TestCase):
                         {"id": 14, "name": "sample.mkv", "size": 30 * 1024 ** 2}]
             async def rename(self, fid, new): self.renames.append((fid, new))
         drive = D()
-        meta = {"names": ["笑傲江湖"], "year": "2001", "episodes": 40, "genres": [18], "lang": "zh", "countries": ["CN"]}
-        raw = [Candidate("magnet", "笑傲江湖 2001 全40集 1080p", "magnet:?xt=urn:btih:" + "8" * 40, size=80 * GB)]
+        meta = {"names": ["笑傲江湖"], "year": "2001", "episodes": 3, "genres": [18], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("magnet", "笑傲江湖 2001 全3集 1080p", "magnet:?xt=urn:btih:" + "8" * 40, size=6 * GB)]
         async def meta_fn(r): return meta
         async def search_fn(m, t, s): return raw
         async def after(r): pass
@@ -764,6 +807,143 @@ class LitePanSourceTest(unittest.TestCase):
         cfg.LITEPAN_SOURCE = "RequestBridge"
 
 
+class MultiSeasonGroupTest(unittest.TestCase):
+    def _env(self, pack_titles, files_by_pack):
+        from app.config import cfg
+        cfg.LIBRARY_ROOT_CID = 5000
+        searches, adds, moves = [], [], []
+
+        class D(FakeDrive):
+            def __init__(self):
+                super().__init__(); self.tree, self.cid, self.cur = {}, 9000, None
+            async def ensure_dir(self, parent, name):
+                if (parent, name) not in self.tree:
+                    self.cid += 1; self.tree[(parent, name)] = self.cid
+                return self.tree[(parent, name)]
+            async def add_offline(self, magnet, dest):
+                adds.append(magnet); self.cur = magnet; return magnet[-4:]
+            async def offline_state(self, h): return "done"
+            async def list_files(self, cid): return files_by_pack[self.cur]
+            async def rename(self, fid, new): pass
+            async def move(self, ids, dest): moves.append((tuple(ids), dest))
+        meta = {"names": ["权力的游戏"], "year": "2011", "episodes": 10, "season_eps": {1: 10, 2: 10, 3: 10},
+                "genres": [18], "lang": "en", "countries": ["US"]}
+        raw = [Candidate("magnet", t, "magnet:?xt=urn:btih:" + k.ljust(40, "0"), size=sz * GB, seeders=sd)
+               for t, k, sz, sd in pack_titles]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, seasons): searches.append(seasons); return raw
+        done = []
+        async def after(r): done.append(r["season"])
+        return D(), Pipeline(D(), meta_fn, search_fn, after, poll=0), searches, adds, moves, done, meta_fn, search_fn, after
+
+    def _files(self, seasons, n=10):
+        return [{"id": s * 100 + e, "name": f"E{e:02d}.mkv", "size": 2 * GB, "path": f"权游/S{s:02d}/E{e:02d}.mkv"}
+                for s in seasons for e in range(1, n + 1)]
+
+    def test_one_search_one_download_for_a_multi_season_pack(self):
+        from app.config import cfg
+        pack = "magnet:?xt=urn:btih:" + "a".ljust(40, "0")
+        drive, _, searches, adds, moves, done, meta_fn, search_fn, after = self._env(
+            [("权力的游戏 S01-S03 1080p BluRay", "a", 60, 5), ("权力的游戏 S02 1080p", "b", 20, 50)], {pack: self._files([1, 2, 3])})
+        try:
+            ids = [db.create("tv", 970, s, "权力的游戏 (2011)") for s in (1, 2, 3)]
+            for i in ids:
+                db.update(i, grp=ids[0])
+            asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(ids[0]))
+            self.assertEqual(len(searches), 1)                                   # 只搜一次，不是一季一季单独搜
+            self.assertEqual(searches[0], [1, 2, 3])
+            self.assertEqual(adds, [pack])                                       # 合集优先，只下载一次
+            self.assertEqual([db.get(i)["status"] for i in ids], ["done"] * 3)
+            self.assertEqual(sorted(done), [1, 2, 3])
+            self.assertEqual([k[1] for k in drive.tree if k[1].startswith("Season")], ["Season 01", "Season 02", "Season 03"])
+            self.assertEqual([m[0][0] for m in moves], [101, 201, 301])          # 每一季的文件分进各自的目录
+            self.assertEqual({len(m[0]) for m in moves}, {10})
+        finally:
+            cfg.LIBRARY_ROOT_CID = 0
+
+    def test_partial_pack_then_single_season_fills_the_gap(self):
+        from app.config import cfg
+        p12 = "magnet:?xt=urn:btih:" + "c".ljust(40, "0")
+        p3 = "magnet:?xt=urn:btih:" + "d".ljust(40, "0")
+        drive, _, searches, adds, moves, done, meta_fn, search_fn, after = self._env(
+            [("权力的游戏 S01-S02 1080p", "c", 40, 5), ("权力的游戏 S03 1080p", "d", 20, 50)],
+            {p12: self._files([1, 2]), p3: self._files([3])})
+        try:
+            ids = [db.create("tv", 971, s, "权力的游戏 (2011)") for s in (1, 2, 3)]
+            for i in ids:
+                db.update(i, grp=ids[0])
+            asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(ids[0]))
+            self.assertEqual(adds, [p12, p3])                                    # 覆盖两季的先用，缺的第 3 季再用单季资源补
+            self.assertEqual([db.get(i)["status"] for i in ids], ["done"] * 3)
+        finally:
+            cfg.LIBRARY_ROOT_CID = 0
+
+    def test_unfilled_season_fails_but_others_stay_done(self):
+        from app.config import cfg
+        p12 = "magnet:?xt=urn:btih:" + "e".ljust(40, "0")
+        drive, _, searches, adds, moves, done, meta_fn, search_fn, after = self._env(
+            [("权力的游戏 S01-S02 1080p", "e", 40, 5)], {p12: self._files([1, 2])})
+        try:
+            ids = [db.create("tv", 972, s, "权力的游戏 (2011)") for s in (1, 2, 3)]
+            for i in ids:
+                db.update(i, grp=ids[0])
+            asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(ids[0]))
+            self.assertEqual([db.get(i)["status"] for i in ids], ["done", "done", "failed"])
+        finally:
+            cfg.LIBRARY_ROOT_CID = 0
+
+    def test_assign_seasons(self):
+        from app.filters import assign_seasons
+        fl = self._files([1, 2])
+        self.assertEqual({s: len(v) for s, v in assign_seasons(fl, [1, 2, 3], "x S01-S03").items()}, {1: 10, 2: 10})
+        bare = [{"id": 1, "name": "E01.mkv", "path": "E01.mkv"}]
+        self.assertEqual(list(assign_seasons(bare, [1], "某剧 全26集")), [1])               # 单季、没标季：整包算第 1 季
+        self.assertEqual(assign_seasons(bare, [1, 2], "某剧 全集"), {})                    # 多季请求又没标季：没法分，不要
+        self.assertEqual(assign_seasons(bare, [2], "某剧 S01-S03"), {})                    # 多季合集没标季：不乱分
+
+
+class SearchDepthPriorityTest(unittest.TestCase):
+    def test_queries_by_depth_keep_name_whole(self):
+        from app.sources import queries
+        names = ["唐人街探案", "Detective Chinatown"]
+        q1 = queries(names, "2015", "tv", [1, 2], 1)
+        q2 = queries(names, "2015", "tv", [1, 2], 2)
+        q3 = queries(names, "2015", "tv", [1, 2], 3)
+        self.assertLessEqual(len(q1), 8); self.assertGreater(len(q2), len(q1)); self.assertGreater(len(q3), len(q2))
+        self.assertIn("唐人街探案 S01", q1)
+        self.assertIn("唐人街探案 全集", q2); self.assertIn("唐人街探案 第2季", q2)
+        self.assertTrue(all(("唐人街探案" in q or "Detective Chinatown" in q) for q in q3))   # 每个查询词都带完整名称
+
+    def test_priority_order_is_configurable(self):
+        from app.config import cfg
+        meta = {"names": ["Dune"], "year": "2021", "episodes": 0}
+        raw = [Candidate("share", "Dune 2021 1080p", "https://115.com/s/abc?password=x"),
+               Candidate("magnet", "Dune 2021 1080p BluRay", "magnet:?xt=urn:btih:" + "7" * 40, size=2 * GB, seeders=50)]
+        try:
+            cfg.PRIORITY = "year,quality,keywords,size,source,seeders"
+            first = build_candidates(raw, meta, "movie", None, R)[0]
+            self.assertEqual(first.kind, "magnet")                                  # 体积合适排在「分享优先」前面
+            cfg.PRIORITY = "source,year,quality"
+            first = build_candidates(raw, meta, "movie", None, R)[0]
+            self.assertEqual(first.kind, "share")                                   # 分享优先放最前
+            cfg.PRIORITY = "quality,year"
+            out = build_candidates([Candidate("magnet", "Dune 2020 720p", "magnet:?xt=urn:btih:" + "8" * 40, size=2 * GB),
+                                    Candidate("magnet", "Dune 2021 1080p", "magnet:?xt=urn:btih:" + "9" * 40, size=2 * GB)],
+                                   meta, "movie", None, R)
+            self.assertEqual([c.title for c in out], ["Dune 2021 1080p", "Dune 2020 720p"])
+        finally:
+            cfg.PRIORITY = "year,quality,keywords,size,source,seeders"
+
+    def test_tags_and_rejects_are_reported(self):
+        meta = {"names": ["Dune"], "year": "2021", "episodes": 0}
+        rep = {}
+        out = build_candidates([Candidate("magnet", "Dune 2021 1080p", "magnet:?xt=urn:btih:" + "6" * 40, size=2 * GB),
+                                Candidate("magnet", "Dune 1984 1080p", "magnet:?xt=urn:btih:" + "5" * 40, size=2 * GB)],
+                               meta, "movie", None, R, rep)
+        self.assertIn("年份吻合", out[0].tags); self.assertIn("1080p", out[0].tags); self.assertIn("体积合适", out[0].tags)
+        self.assertEqual([x["reason"] for x in rep["rejects"]], ["年份不符"])         # 被过滤的也留着，可以强制使用
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
@@ -859,7 +1039,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(done, [rid])
         self.assertEqual(len(drive.moved), 1)
         self.assertEqual(drive.moved[0][0], [1])  # 只移动合格的那个视频
-        self.assertEqual(len(drive.deleted), 3)   # 3 次尝试的暂存目录都被清理
+        self.assertEqual(len(drive.deleted), 2)   # 先试做种最多的磁力（失败），再试第二个（成功），两次的暂存目录都被清理
         self.assertIn("换下一个", r["log"])
 
     def test_all_fail(self):

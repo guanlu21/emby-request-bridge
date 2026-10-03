@@ -42,6 +42,8 @@ SCHEMA = [
         F("cloudsaver_pass", "CloudSaver 密码", "password"),
         F("kite_url", "纸鸢磁力 MCP 地址", help="例如 https://magnet.kiteyuan.info/mcp，以纸鸢磁力「MCP」页面客户端配置里的 url 为准。它会聚合你在纸鸢里配置的国内磁力站（包括自定义规则的站点）"),
         F("kite_token", "纸鸢磁力 MCP Token", "password", "在纸鸢磁力「MCP」页面生成（mcp__ 开头）"),
+        F("kite_exclude", "纸鸢磁力：排除的搜索引擎", help="逗号分隔；结果里带有引擎/来源信息时，这些引擎的结果会被丢弃（默认排除综合匹配、快速搜索）", default="综合匹配,快速搜索"),
+        F("kite_engine", "纸鸢磁力：指定搜索引擎（可选）", help="如 磁力帝；仅当 magnet_search 工具支持选择引擎时才会传过去，点「测试纸鸢磁力」可以看到工具有哪些参数"),
     ]},
     {"group": "LitePan 联动", "fields": [
         F("litepan_url", "LitePan 地址", help="例如 http://192.168.1.10:5211；留空则不联动，改由本服务等一会儿后通知 Emby 刷新"),
@@ -62,6 +64,9 @@ SCHEMA = [
         F("max_gb", "单文件最大（GB）", "number", default=5),
         F("prefer_min_gb", "偏好区间下限（GB）", "number", "落在偏好区间内的排名更靠前", default=1),
         F("prefer_max_gb", "偏好区间上限（GB）", "number", default=3),
+        F("search_depth", "搜索深度", "select", "越深，用的关键词越多、各搜索源返回的条数越多（也更慢）；某条请求搜不到想要的，还可以在「候选/替换」里单独做一次最深的搜索",
+          [["1", "1 普通"], ["2", "2 深入（默认）"], ["3", "3 最深"]], "2"),
+        F("priority", "候选优先级顺序", help="从前到后逐项比较，靠前的更重要。可用项：year 年份吻合、quality 画质（1080p 最优）、keywords 优先关键词、size 体积合适、source 分享链接优先、seeders 做种数；电视剧始终先看覆盖了几季", default="year,quality,keywords,size,source,seeders"),
         F("max_attempts", "每个请求最多尝试几个资源", "number", default=8),
         F("offline_timeout", "单个资源离线等待上限（秒）", "number", "磁力在 115 上一直下不完（死种）时，等这么久就换下一个；热门资源通常几分钟内完成", default=600),
     ]},

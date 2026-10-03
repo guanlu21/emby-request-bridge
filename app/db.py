@@ -27,7 +27,8 @@ def conn():
             title TEXT, status TEXT, picked TEXT DEFAULT '', error TEXT DEFAULT '',
             tried TEXT DEFAULT '[]', log TEXT DEFAULT '[]', created REAL, updated REAL)""")
         cols = [r[1] for r in _conn.execute("PRAGMA table_info(requests)")]
-        for col, ddl in (("cands", "TEXT DEFAULT '[]'"), ("placed", "TEXT DEFAULT ''"), ("category", "TEXT DEFAULT ''")):
+        for col, ddl in (("cands", "TEXT DEFAULT '[]'"), ("placed", "TEXT DEFAULT ''"), ("category", "TEXT DEFAULT ''"),
+                         ("grp", "INTEGER DEFAULT 0"), ("rejects", "TEXT DEFAULT '[]'"), ("cands_at", "REAL DEFAULT 0")):
             if col not in cols:
                 _conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {ddl}")
         if "emby_user_id" not in cols:
@@ -149,3 +150,23 @@ def status_of(media_type, tmdb_id):
         r = conn().execute("SELECT status FROM requests WHERE media_type=? AND tmdb_id=? ORDER BY id DESC LIMIT 1",
                            (media_type, tmdb_id)).fetchone()
         return r["status"] if r else ""
+
+
+def group_rows(grp: int):
+    """同一批求片的各季（电视剧一次求多季时共用 grp = 第一条的 id）。"""
+    with _lock:
+        return [dict(r) for r in conn().execute("SELECT * FROM requests WHERE grp=? ORDER BY season", (grp,))]
+
+
+def leaders(ids):
+    """一批 id 里每个分组只留一个（同组的各季由同一次流程处理）。"""
+    seen, out = set(), []
+    for i in ids:
+        r = get(i)
+        if not r:
+            continue
+        key = r["grp"] or i
+        if key not in seen:
+            seen.add(key)
+            out.append(i)
+    return out

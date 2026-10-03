@@ -47,7 +47,8 @@ def _from_items(items) -> list[dict]:
             continue
         out.append({"title": str(_pick(it, "title", "name", "标题", "名称") or ""), "magnet": mag,
                     "size": parse_size(_pick(it, "size", "大小", "file_size", "total_size")),
-                    "seeders": int(_pick(it, "seeders", "seeds", "seeder", "做种") or 0)})
+                    "seeders": int(_pick(it, "seeders", "seeds", "seeder", "做种") or 0),
+                    "engine": str(_pick(it, "engine", "source", "site", "provider", "searcher", "from", "引擎", "来源") or "")})
     return out
 
 
@@ -76,7 +77,7 @@ def parse_results(text: str) -> list[dict]:
                 title = line
                 break
         near = text[max(0, m.start() - 160): m.end() + 160]
-        out.append({"title": title, "magnet": m.group(0), "size": parse_size(near), "seeders": 0})
+        out.append({"title": title, "magnet": m.group(0), "size": parse_size(near), "seeders": 0, "engine": ""})
         last = m.end()
     return out
 
@@ -144,23 +145,42 @@ class KiteSession:
                     raise  # 无状态服务可能不需要 initialize；只有鉴权失败才算错
             self._ready = True
 
-    async def tools(self) -> list[str]:
+    async def _tool_list(self) -> list[dict]:
         await self._init()
-        return [t.get("name", "") for t in (await self._rpc("tools/list", {})).get("tools", [])]
+        return (await self._rpc("tools/list", {})).get("tools", [])
+
+    async def tools(self) -> list[str]:
+        return [t.get("name", "") for t in await self._tool_list()]
+
+    async def props(self) -> dict:
+        """{工具名: [参数名]}，用来看 magnet_search 支持哪些参数（比如能不能选引擎）。"""
+        return {t.get("name", ""): sorted(((t.get("inputSchema") or {}).get("properties") or {}).keys()) for t in await self._tool_list()}
 
     async def search(self, query: str, limit: int = 50) -> list[dict]:
         await self._init()
-        res = await self._rpc("tools/call", {"name": "magnet_search", "arguments": {"query": query, "limit": limit}})
+        args = {"query": query, "limit": limit}
+        if cfg.KITE_ENGINE:
+            ps = (await self.props()).get("magnet_search", [])
+            key = next((p for p in ("engine", "engines", "source", "sources", "searcher", "provider") if p in ps), "")
+            if key:
+                args[key] = cfg.KITE_ENGINE
+        res = await self._rpc("tools/call", {"name": "magnet_search", "arguments": args})
         if res.get("isError"):
             raise RuntimeError("magnet_search 返回错误：" + json.dumps(res.get("content"), ensure_ascii=False)[:150])
         sc = res.get("structuredContent")
+        text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
+        self.last_raw = text or json.dumps(sc, ensure_ascii=False)
+        parsed = []
         if sc:
             items = sc if isinstance(sc, list) else next((sc[k] for k in ("results", "items", "data", "list") if isinstance(sc.get(k), list)), [])
             parsed = _from_items(items)
-            if parsed:
-                return parsed
-        text = "\n".join(c.get("text", "") for c in res.get("content", []) if c.get("type") == "text")
-        return parse_results(text)
+        return exclude_engines(parsed or parse_results(text))
+
+
+def exclude_engines(rows: list[dict]) -> list[dict]:
+    """丢弃来自被排除引擎（默认：综合匹配、快速搜索）的结果；结果里没有引擎信息的无法判断，保留。"""
+    terms = [t.strip().lower() for t in re.split(r"[,，;；\n]+", cfg.KITE_EXCLUDE or "") if t.strip()]
+    return [r for r in rows if not (r.get("engine") and any(t in r["engine"].lower() for t in terms))]
 
 
 def configured() -> bool:
@@ -170,9 +190,12 @@ def configured() -> bool:
 async def test() -> dict:
     s = KiteSession()
     try:
-        tools = await s.tools()
-        sample = await s.search("流浪地球", 5)
-        return {"ok": True, "tools": tools, "sample_count": len(sample), "first": (sample[0]["title"] if sample else "")}
+        props = await s.props()
+        sample = await s.search("流浪地球", 30)
+        engines = sorted({r["engine"] for r in sample if r.get("engine")})
+        return {"ok": True, "tools": list(props), "props": props, "sample_count": len(sample),
+                "first": (sample[0]["title"] if sample else ""), "engines": engines,
+                "raw": (getattr(s, "last_raw", "") or "")[:400]}
     except Exception as e:  # noqa
         return {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
     finally:

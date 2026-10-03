@@ -1,14 +1,22 @@
 <!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>求片</title>
+<title>Emby求片</title>
+<link rel="icon" type="image/png" href="/static/icon-64.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#182030">
+<meta name="apple-mobile-web-app-title" content="Emby求片">
 <style>
 :root{--bg:#f3f5f9;--sf:#fff;--line:#dde2ec;--fg:#151a26;--mut:#6b7590;--ac:#2f5fd0;--acfg:#fff;--ok:#1a7f37;--bad:#c62828;--run:#2f5fd0;--warn:#a25f00;--hh:52px}
 @media(prefers-color-scheme:dark){:root{--bg:#10141c;--sf:#182030;--line:#27314a;--fg:#e6eaf2;--mut:#8a94aa;--ac:#6f9bff;--acfg:#0b1020;--ok:#4cc26b;--bad:#ef6a6a;--run:#6f9bff;--warn:#e0a13a}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;-webkit-text-size-adjust:100%}
 header{display:flex;align-items:center;gap:16px;padding:0 20px;height:var(--hh);background:var(--sf);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
-header b{font-size:17px}nav{display:flex;gap:4px;flex:1}
+header b{font-size:17px}
+.brand{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.brand img,.biglogo{background:#fff;border-radius:8px;padding:3px}
+.biglogo{border-radius:16px;padding:6px;justify-self:start}nav{display:flex;gap:4px;flex:1}
 nav button{border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
 nav button.on{background:var(--bg);color:var(--fg);font-weight:600}
 main{max-width:1100px;margin:0 auto;padding:20px}
@@ -60,12 +68,21 @@ details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut);font:12px/1.5 inh
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .seg button{border:0;background:var(--sf);padding:7px 18px;cursor:pointer}.seg button.on{background:var(--ac);color:var(--acfg)}
 code{word-break:break-all}
+.adm{table-layout:fixed}
+.adm th:nth-child(1){width:34px}.adm th:nth-child(3){width:90px}.adm th:nth-child(4){width:150px}.adm th:nth-child(5){width:26%}.adm th:nth-child(6){width:120px}
+.adm td{overflow-wrap:anywhere}
+.adm td.op{display:flex;flex-direction:column;gap:6px}
+.adm td.op .btn{padding:4px 8px;font-size:13px;white-space:nowrap}
+details pre{max-width:100%}
 /* 弹窗 */
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--sf);color:var(--fg);padding:20px;max-width:400px;width:92%}
 dialog::backdrop{background:rgba(0,0,0,.5)}
 dialog label{display:flex;gap:8px;padding:6px 0}
 .crow{display:flex;gap:10px;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
 .crow b{font-weight:500;word-break:break-all}
+.ctag{display:inline-block;font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:0 7px;margin:2px 4px 0 0;line-height:18px}
+.ctag.ok{color:var(--ok);border-color:var(--ok)}
+.crow .cmain{min-width:0;flex:1}
 #qrbox{background:#fff;padding:12px;border-radius:8px;width:fit-content;margin:10px auto;color:#000}
 #qrbox svg{display:block;width:220px;height:220px}
 #flist{display:grid;gap:4px;max-height:260px;overflow:auto;margin:10px 0}
@@ -90,6 +107,8 @@ dialog label{display:flex;gap:8px;padding:6px 0}
   .btn{min-height:40px}
   .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
   /* 表格 → 卡片 */
+  .adm{table-layout:auto}
+  .adm td.op{flex-direction:row}
   .rt thead{display:none}
   .rt,.rt tbody,.rt tr,.rt td{display:block;width:100%}
   .rt tr{position:relative;background:var(--sf);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
@@ -117,11 +136,11 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 }
 </style></head><body>
 
-<header id="hd" class="hide"><b>求片</b>
+<header id="hd" class="hide"><b class="brand"><img src="/static/logo-48.png" alt="" width="28" height="28">Emby求片</b>
   <nav id="nav"></nav><small id="who"></small><button class="btn" onclick="logout()">退出</button></header>
 <main>
 <section id="v-login" class="login hide">
-  <h2>登录求片</h2><small>使用你的 Emby 用户名和密码</small>
+  <img class="biglogo" src="/static/icon-192.png" alt="" width="72" height="72"><h2>Emby求片</h2><small>使用你的 Emby 用户名和密码登录</small>
   <div id="lsetup" class="hide" style="display:grid;gap:8px"><input id="eurl" type="text" placeholder="Emby 地址，如 http://192.168.1.10:8096" autocapitalize="off">
     <small>首次使用：请用 Emby 管理员账号登录，它会成为本站管理员。</small></div>
   <input id="u" type="text" placeholder="用户名" autocomplete="username" autocapitalize="off">
@@ -148,7 +167,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button>
   </div>
   <small id="cnt"></small>
-  <div class="wrap" style="margin-top:8px"><table class="rt"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="wrap" style="margin-top:8px"><table class="rt adm"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 
 <section id="v-set" class="hide">
@@ -162,8 +181,12 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 <dialog id="qdlg"><h3 style="margin-top:0">扫码授权 115</h3><div id="qrbox"></div>
   <small id="qst">请用 115 手机 App 扫码并确认</small>
   <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="QPOLL=false;$('qdlg').close()">关闭</button></div></dialog>
-<dialog id="cdlg" style="max-width:640px"><h3 id="ct" style="margin-top:0"></h3><small id="chint"></small><div id="clist" style="max-height:60vh;overflow:auto;margin:10px 0"></div>
-  <div style="display:flex;justify-content:flex-end"><button class="btn" onclick="$('cdlg').close()">关闭</button></div></dialog>
+<dialog id="cdlg" style="max-width:680px"><h3 id="ct" style="margin-top:0"></h3><small id="chint"></small>
+  <div class="seg" id="ctabs" style="margin:10px 0"><button data-t="c" class="on" onclick="candTab('c')">候选资源</button><button data-t="r" onclick="candTab('r')">被过滤的资源</button></div>
+  <div id="clist" style="max-height:52vh;overflow:auto"></div>
+  <div class="acts" style="margin-top:10px;justify-content:space-between">
+    <div class="acts"><button class="btn" id="cmore" onclick="candMore()">显示更多</button><button class="btn" id="cdeep" onclick="candDeep()" title="用最深的搜索（更多关键词、更多条数、不用缓存）重新找一遍，只刷新候选，不下载">深度搜索</button></div>
+    <button class="btn" onclick="$('cdlg').close()">关闭</button></div></dialog>
 <dialog id="fdlg"><h3 style="margin-top:0">选择 115 目录</h3><small id="fpath"></small><div id="flist"></div>
   <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" onclick="fup()">上一级</button><button class="btn" onclick="$('fdlg').close()">取消</button><button class="btn pri" onclick="fchoose()">选择当前目录</button></div></dialog>
 <div id="toast" role="status"></div>
@@ -282,21 +305,54 @@ function renderAdmin(){
   <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
 }
 
-let CANDS=[],CSTAT='',CID=0;
+let CD=null,CTAB='c',CSHOW=20,CID=0;
+async function loadCands(){
+  try{CD=await api(`/api/requests/${CID}/candidates`)}catch(e){toast(e.message);return false}
+  return true;
+}
 async function showCands(id){
-  let d;try{d=await api(`/api/requests/${id}/candidates`)}catch(e){return toast(e.message)}
-  CANDS=d.candidates;CSTAT=d.status;CID=id;
-  $('ct').textContent=d.title+' 的候选资源';
-  $('chint').textContent=d.status=='done'?'选一个替换：新资源下载并通过筛选后，才会删除当前已入库的文件；新资源失败则保留原文件。':'选一个来用。';
-  $('clist').innerHTML=CANDS.length?CANDS.map((c,i)=>`<div class="crow"><div><b>${esc(c.title)}</b><br><small>${c.kind=='share'?'115 分享':'磁力'} · ${esc(c.src)} · 分 ${c.score}${c.size?' · '+(c.size/1073741824).toFixed(1)+' GB':''}${c.state?' · '+esc(c.state):''}</small></div>
-    <button class="btn" ${c.state=='当前使用'?'disabled':''} onclick="useCand(${i})">${CSTAT=='done'?'替换为此资源':'使用此资源'}</button></div>`).join('')
-    :'<small>这条请求还没有候选记录：点「重新搜索」后会生成。</small>';
-  $('cdlg').showModal();
+  CID=id;CTAB='c';CSHOW=20;
+  if(!await loadCands())return;
+  $('cdlg').showModal();renderCands();
+}
+function candTab(t){CTAB=t;CSHOW=20;renderCands()}
+function candMore(){CSHOW+=20;renderCands()}
+function renderCands(){
+  const d=CD,list=CTAB=='c'?d.candidates:d.rejects;
+  $('ct').textContent=d.title+(d.season?` · 第${d.season}季`:'')+' 的资源';
+  document.querySelectorAll('#ctabs button').forEach(b=>b.classList.toggle('on',b.dataset.t==CTAB));
+  $('ctabs').children[0].textContent=`候选资源（${d.candidates.length}）`;$('ctabs').children[1].textContent=`被过滤的资源（${d.rejects.length}）`;
+  $('chint').textContent=CTAB=='c'
+    ?(d.status=='done'?'选一个替换：新资源下载并通过筛选后，才会删除当前已入库的文件；新资源失败则保留原文件。':'选一个来用。')
+    :'这些没通过筛选，原因写在每条下面。想用哪个可以强制使用（仍会按文件规则过滤视频）。';
+  const rows=list.slice(0,CSHOW);
+  $('clist').innerHTML=rows.length?rows.map((c,i)=>{
+    const meta=`${c.kind=='share'?'115 分享':'磁力'} · ${esc(c.src||'')}${c.score?' · 分 '+c.score:''}${c.size?' · '+(c.size/1073741824).toFixed(1)+' GB':''}${c.seeders?' · 做种 '+c.seeders:''}${c.state?' · '+esc(c.state):''}`;
+    const tags=CTAB=='c'?(c.tags||[]).map(t=>`<span class="ctag ok">${esc(t)}</span>`).join(''):`<span class="ctag">${esc(c.reason||'')}</span>`;
+    const label=CTAB=='r'?'强制使用':(d.status=='done'?'替换为此资源':'使用此资源');
+    return `<div class="crow"><div class="cmain"><b>${esc(c.title)}</b><br><small>${meta}</small><div>${tags}</div></div>
+      <button class="btn" ${c.state=='当前使用'?'disabled':''} onclick="useCand(${i})">${label}</button></div>`}).join('')
+    :(CTAB=='c'?'<small>没有候选。可以点「深度搜索」再找一遍，或看「被过滤的资源」。</small>':'<small>没有被过滤的资源记录。</small>');
+  $('cmore').classList.toggle('hide',list.length<=CSHOW);
 }
 async function useCand(i){
-  const c=CANDS[i];
-  if(CSTAT=='done'&&!confirm(`替换为：\n${c.title}\n\n新资源下载成功后，会删除当前已入库的文件。继续？`))return;
+  const c=(CTAB=='c'?CD.candidates:CD.rejects)[i];
+  if(CTAB=='r'&&!confirm(`这个资源没通过筛选（${c.reason}）。仍然使用？\n${c.title}`))return;
+  if(CD.status=='done'&&!confirm(`替换为：\n${c.title}\n\n新资源下载成功后，会删除当前已入库的文件。继续？`))return;
   try{await api(`/api/requests/${CID}/replace`,{method:'POST',body:{url:c.url}});$('cdlg').close();toast('已开始处理，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
+}
+async function candDeep(){
+  const btn=$('cdeep'),ver=CD.ver;btn.disabled=true;btn.textContent='深度搜索中…';
+  try{
+    await api(`/api/requests/${CID}/research`,{method:'POST',body:{depth:3}});
+    for(let k=0;k<40;k++){            // 最多等 2 分钟，等候选列表更新
+      await new Promise(r=>setTimeout(r,3000));
+      if(!await loadCands())break;
+      if(CD.ver!==ver&&!CD.busy)break;
+    }
+    renderCands();toast(`深度搜索完成：${CD.candidates.length} 个候选，${CD.rejects.length} 个被过滤`);
+  }catch(e){toast(e.message)}
+  btn.disabled=false;btn.textContent='深度搜索';
 }
 async function manual(id){
   const url=prompt('粘贴 115 分享链接或磁力链接，将跳过搜索直接处理这一条：');
@@ -391,7 +447,11 @@ async function runTest(path,fmt,wait){
 }
 const testSet=()=>runTest('/api/settings/test',r=>r.ok?`TMDB 连接正常（${r.ms} ms）`:'失败：'+r.error);
 const testCs=()=>runTest('/api/settings/cloudsaver/test',r=>r.ok?`CloudSaver 连接正常：试搜「流浪地球」得到 ${r.count} 条 115 链接${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error,'测试中…（CloudSaver 搜索可能要十几秒）');
-const testKite=()=>runTest('/api/settings/kite/test',r=>r.ok?`纸鸢磁力连接正常：工具 ${r.tools.join('、')||'（无）'}；试搜「流浪地球」${r.sample_count} 条${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error);
+const testKite=()=>runTest('/api/settings/kite/test',r=>{
+  if(!r.ok)return '失败：'+r.error;
+  const ps=Object.entries(r.props||{}).map(([k,v])=>`${k}(${v.join(', ')||'无参数'})`).join('；');
+  return `纸鸢磁力连接正常\n工具：${ps||'（无）'}\n试搜「流浪地球」（已排除不要的引擎）：${r.sample_count} 条${r.first?'，例：'+r.first.slice(0,30):''}\n`+
+    `结果里的引擎/来源：${(r.engines||[]).join('、')||'没有（这个工具的返回里没有引擎信息，无法按引擎过滤）'}\n\n原始返回（前 400 字）：\n${r.raw||''}`});
 const lpText=r=>`${r.ok?'LitePan 返回成功':'失败'}\n${r.hint}\n\n请求：POST ${r.url}\n${JSON.stringify(r.body)}\n返回：HTTP ${r.status} ${r.response||''}\n\n用终端自己试（把秘钥换成真实的）：\n${r.curl}`;
 const testLp=()=>runTest('/api/settings/litepan/test',lpText);
 async function triggerLp(){

@@ -96,24 +96,114 @@ def norm(s: str) -> str:
 
 
 PACK_STRICT = re.compile(r"全\s*\d+\s*集|\d+\s*集全|完结|(?i:E|EP)\d{1,3}\s*[-~]\s*(?i:E|EP)?\d{1,3}")
+PACK_ALL = re.compile(r"全集|合集|(?i:complete)")
 PACK_LOOSE = re.compile(r"全集|合集|(?i:complete)|" + PACK_STRICT.pattern)
 STOP = {"the", "a", "an", "of", "and"}
 
 
-def parse_season(title: str):
-    """返回 (季号|None, 是否整季包, 是否多季)"""
+def _cn_int(v: str) -> int:
+    """'3'、'三'、'十'、'十二'、'二十' → int"""
+    if v.isdigit():
+        return int(v)
+    if "十" in v:
+        head, _, tail = v.partition("十")
+        return (CN_NUM.get(head, 1) if head else 1) * 10 + (CN_NUM.get(tail, 0) if tail else 0)
+    return CN_NUM.get(v, 0)
+
+
+_NUM = r"\d{1,2}|[一二三四五六七八九十]{1,3}"
+
+
+def season_span(title: str):
+    """标题里写明的季范围 (起, 止)；单季返回 (n, n)；没写返回 None。
+    支持 S01-S03、第1-3季、第一季至第五季、全3季、3季全、单独的 S02 / 第二季。"""
     t = title
-    if re.search(r"(?i)S\d{1,2}\s*[-~]\s*S?\d{1,2}(?!\d)|第\s*\d+\s*[-~]\s*\d+\s*季", t):
+    m = re.search(r"(?i)(?<![a-z])S(\d{1,2})\s*[-~至到]\s*S?(\d{1,2})(?!\d)", t)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(rf"第\s*({_NUM})\s*季?\s*[-~至到]\s*第?\s*({_NUM})\s*季", t)
+    if m:
+        return _cn_int(m.group(1)), _cn_int(m.group(2))
+    m = re.search(rf"[全共]\s*({_NUM})\s*季|(?<![第\d])({_NUM})\s*季\s*全(?!集)", t)
+    if m:
+        return 1, _cn_int(m.group(1) or m.group(2))
+    m = re.search(r"(?i)(?<![a-z])S(\d{1,2})(?:\s*E\d{1,3})?(?![a-z0-9])", t)
+    if m:
+        return int(m.group(1)), int(m.group(1))
+    m = re.search(rf"第\s*({_NUM})\s*季", t)
+    if m:
+        return _cn_int(m.group(1)), _cn_int(m.group(1))
+    return None
+
+
+def parse_season(title: str):
+    """返回 (季号|None, 是否整季包, 是否多季)。多季时季号为 None。"""
+    span = season_span(title)
+    if span and span[0] != span[1]:
         return None, False, True
-    m = re.search(r"(?i)(?<![a-z])S(\d{1,2})(?:\s*E(\d{1,3}))?(?![a-z0-9])", t)
+    if not span:
+        return None, False, False
+    s = span[0]
+    m = re.search(r"(?i)S\d{1,2}\s*E(\d{1,3})", title)
     if m:
-        return int(m.group(1)), m.group(2) is None or bool(PACK_LOOSE.search(t)), False
-    m = re.search(r"第\s*(\d{1,2}|[一二三四五六七八九十])\s*季", t)
-    if m:
-        v = m.group(1)
-        single = re.search(r"第\s*\d+\s*集|E\d+", t, re.I) and not PACK_LOOSE.search(t)
-        return (int(v) if v.isdigit() else CN_NUM[v]), not single, False
-    return None, False, False
+        return s, bool(PACK_LOOSE.search(title)), False
+    single = re.search(r"第\s*\d+\s*[集话話]|(?i:(?<![a-z0-9])EP?\d{1,3}(?!\d))", title) and not PACK_LOOSE.search(title)
+    return s, not single, False
+
+
+SINGLE_EP = re.compile(r"第\s*\d{1,3}\s*[集话話](?!\s*[-~至到])|(?i:(?<![a-z0-9])EP?\s*\d{1,3}(?![\d-]))")
+
+
+def single_episode_only(title: str) -> bool:
+    return bool(SINGLE_EP.search(title)) and not PACK_LOOSE.search(title) and not re.search(r"(?<![第\d])\d+\s*集", title)
+
+
+_SEASON_PATS = [re.compile(r"(?i)S(\d{1,2})[ ._-]*E\d"), re.compile(r"(?i)(?<![a-z])Season[ ._-]*(\d{1,2})"),
+                re.compile(rf"第\s*({_NUM})\s*季"), re.compile(r"(?i)(?<![a-z0-9])S(\d{1,2})(?![a-z0-9])")]
+
+
+def season_of_path(path: str):
+    """文件所属的季：先看文件名，再往上看各级文件夹名；认不出返回 None。"""
+    for comp in reversed(re.split(r"[\\/]", path)):
+        for p in _SEASON_PATS:
+            m = p.search(comp)
+            if m:
+                return _cn_int(m.group(1))
+    return None
+
+
+def assign_seasons(files: list[dict], wanted: list[int], title: str) -> dict:
+    """把下载到的视频分给请求的各季 → {季: [文件]}。
+    文件/文件夹名里识别出季的，按识别结果分；整包都没标季时：标题不是多季合集、且只请求一季，才整包算这一季。"""
+    seasons = {f["id"]: season_of_path(f.get("path") or f["name"]) for f in files}
+    out = {s: [f for f in files if seasons[f["id"]] == s] for s in wanted}
+    if any(seasons.values()):
+        return {s: fl for s, fl in out.items() if fl}
+    span = season_span(title)
+    if len(wanted) == 1 and not (span and span[0] != span[1]):
+        s = wanted[0]
+        if s <= 1 or span == (s, s):
+            return {s: list(files)}
+    return {}
+
+
+def verify_season(files: list[dict], season: int, title: str) -> bool:
+    """第 2 季及以后：标题明确写了就是这一季，或文件/文件夹名里能识别出这一季，才算确认。"""
+    if season <= 1:
+        return True
+    if season_span(title) == (season, season):
+        return True
+    return any(season_of_path(f.get("path") or f["name"]) == season for f in files)
+
+
+def filter_season(files: list[dict], season: int):
+    """合集（多季）下载完成后，只留请求的这一季。(保留, 丢弃)
+    规则：识别出的季里有别的季，才会过滤；整包都没标季、或都是这一季，原样保留。"""
+    seasons = {f["id"]: season_of_path(f.get("path") or f["name"]) for f in files}
+    detected = [s for s in seasons.values() if s]
+    if not detected or all(s == season for s in detected):
+        return files, []
+    return [f for f in files if seasons[f["id"]] == season], [f for f in files if seasons[f["id"]] != season]
 
 
 def _years(text: str) -> list[str]:
@@ -130,26 +220,30 @@ def _is_sequel(spaced_title: str, name: str) -> bool:
 
 
 def name_hit(result_title: str, names: list[str]) -> bool:
-    """名字命中：整名包含，或去掉副标题后包含，或英文名的关键词都出现（不要求相邻、不在乎标点）。"""
+    """名称必须完整出现在资源标题里：不拆词、不乱序、不去副标题（任何文字都一样）；
+    只忽略大小写、空格和标点（Dune.Part.Two = Dune: Part Two）。片名后面紧跟 1-2 位数字的当续集排除。"""
     rt = norm(result_title)
-    toks = set(re.findall(r"[a-z0-9]+", result_title.lower()))
-    cands = []
-    for n in names:
-        cands.append(n)
-        head = re.split(r"[:：]", n, maxsplit=1)[0].strip()
-        if head and head != n and len(norm(head)) >= 2:
-            cands.append(head)
     spaced = re.sub(r"[\W_]+", " ", result_title.lower()).strip()
-    for n in cands:
+    for n in names:
         k = norm(n)
-        if k and k in rt:
-            if not _is_sequel(spaced, n):
-                return True
-            continue
-        ts = [t for t in re.findall(r"[a-z0-9]+", n.lower()) if t not in STOP]
-        if len(ts) >= 2 and all(t in toks for t in ts):
+        if k and k in rt and not _is_sequel(spaced, n):
             return True
     return False
+
+
+def year_rank(title: str, names: list[str], year) -> int:
+    """年份吻合度：2 = 同年；1 = 差一年；0 = 标题里没写年份（也可以考虑，只是排在后面）。"""
+    try:
+        ty = int(year)
+    except (TypeError, ValueError):
+        return 0
+    joined = " ".join(names)
+    ys = [int(y) for y in _years(title) if y not in joined]
+    if not ys:
+        return 0
+    if any(y == ty for y in ys):
+        return 2
+    return 1 if any(abs(y - ty) <= 1 for y in ys) else 0
 
 
 def match_reason(result_title: str, names: list[str], year, media_type: str, season) -> str:
@@ -166,18 +260,24 @@ def match_reason(result_title: str, names: list[str], year, media_type: str, sea
         if ys and ty and not any(abs(int(y) - ty) <= 1 for y in ys):
             return "年份不符"
         return ""
-    s, pack, multi = parse_season(result_title)
-    if multi:
-        return "多季合集"
-    if s is not None:
-        if s != season:
+    span = season_span(result_title)
+    multi = bool(span and span[0] != span[1])
+    if multi:                                   # 多季合集：请求的这一季在范围内就收（下载后只留这一季）
+        if not (span[0] <= season <= span[1]):
+            return "季不在合集范围内"
+    elif span:
+        if span[0] != season:
             return "季不符"
+        s, pack, _ = parse_season(result_title)
         if not pack:
             return "只有单集"
-    elif season != 1 or not PACK_STRICT.search(result_title):
-        return "没写季/整季信息"
+    else:                                       # 标题没写季：第 1 季直接收；其它季只收「全集/合集」这类整包
+        if single_episode_only(result_title):
+            return "只有单集"
+        if season != 1 and not PACK_ALL.search(result_title):
+            return "没写季信息（且不是第 1 季）"
     if ys and ty:
-        ok = any(abs(int(y) - ty) <= 1 for y in ys) if season == 1 else any(int(y) >= ty - 1 for y in ys)
+        ok = any(abs(int(y) - ty) <= 1 for y in ys) if (season == 1 and not multi) else any(int(y) >= ty - 1 for y in ys)
         if not ok:
             return "年份不符"
     return ""
@@ -210,7 +310,22 @@ def score(title: str, seeders: int = 0, is_share: bool = False, per_file: float 
     return sc
 
 
-def magnet_size_ok(size: float, media_type: str, episodes: int, rules: Rules) -> bool:
-    """磁力只知道总大小：电影看总大小，整季包按平均每集大小折算。"""
-    per = size if media_type == "movie" else size / max(episodes, 1)
-    return rules.min_size <= per <= rules.max_size
+def magnet_size_ok(size: float, media_type: str, episodes: int, rules: Rules, multi: bool = False) -> bool:
+    """磁力只知道总大小：电影看总大小；电视剧按每集平均大小（下限用「下载后保留的最小文件」，不是 500MB）；
+    多季合集或不知道集数时，只要求不是明显太小。"""
+    if media_type == "movie":
+        return rules.min_size <= size <= rules.max_size
+    if multi or episodes <= 0:
+        return size >= rules.keep_min
+    return rules.keep_min <= size / episodes <= rules.max_size
+
+
+PRIORITY_DEFAULT = "year,quality,keywords,size,source,seeders"
+PRIORITY_LABELS = {"year": "年份吻合", "quality": "画质", "keywords": "优先关键词", "size": "体积合适", "source": "分享优先", "seeders": "做种数"}
+
+
+def priority_tuple(order: str, facts: dict) -> tuple:
+    """按 order（逗号分隔，靠前的优先）依次比较各项；facts 里没有的项按 0 算。越大越优先。"""
+    keys = [k.strip() for k in (order or PRIORITY_DEFAULT).split(",") if k.strip() in PRIORITY_LABELS]
+    keys += [k for k in PRIORITY_DEFAULT.split(",") if k not in keys]
+    return tuple(facts.get(k, 0) for k in keys)

@@ -115,13 +115,13 @@ class P115Drive:
             return "done"
         return "running"
 
-    async def list_files(self, cid: int) -> list[dict]:
+    async def list_files(self, cid: int, _prefix: str = "") -> list[dict]:
         out = []
         for it in await self._children(cid):
             if "fid" in it:
-                out.append({"id": it["fid"], "name": it["n"], "size": int(it.get("s", 0))})
+                out.append({"id": it["fid"], "name": it["n"], "size": int(it.get("s", 0)), "path": _prefix + it["n"]})
             else:
-                out += await self.list_files(int(it["cid"]))
+                out += await self.list_files(int(it["cid"]), _prefix + it.get("n", "") + "/")
         return out
 
     async def rename(self, fid, new_name: str):
@@ -273,14 +273,14 @@ class OpenDrive:
                 return i["id"]
         return await self.mkdir(parent, name)
 
-    async def list_files(self, cid: int) -> list[dict]:
+    async def list_files(self, cid: int, _prefix: str = "") -> list[dict]:
         out = []
         for it in await self._children(cid):
+            nm = it.get("fn") or it.get("file_name", "")
             if self._is_dir(it):
-                out += await self.list_files(int(it["fid"]))
+                out += await self.list_files(int(it["fid"]), _prefix + nm + "/")
             else:
-                out.append({"id": it["fid"], "name": it.get("fn") or it.get("file_name", ""),
-                            "size": int(it.get("fs") or it.get("size") or 0)})
+                out.append({"id": it["fid"], "name": nm, "size": int(it.get("fs") or it.get("size") or 0), "path": _prefix + nm})
         return out
 
     async def add_offline(self, magnet: str, dest: int) -> str:

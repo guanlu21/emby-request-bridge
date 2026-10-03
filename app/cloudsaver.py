@@ -80,9 +80,15 @@ def parse_results(data) -> list[dict]:
 
 
 class CloudSaver:
+    """登录/搜索接口路径各试几种：CloudSaver 的前端页面和接口常在同一个端口，
+    /user/login 这类路径可能被前端的静态服务接走（返回 405/404 或 HTML），真正的接口在 /api/ 下。"""
+
+    LOGIN_PATHS = ("/api/user/login", "/user/login")
+    SEARCH_PATHS = ("/api/search", "/search")
+
     def __init__(self):
         self._c = httpx.AsyncClient(timeout=60)
-        self._tok, self._lk = "", asyncio.Lock()
+        self._tok, self._lk, self._search_path = "", asyncio.Lock(), ""
 
     async def close(self):
         await self._c.aclose()
@@ -91,27 +97,48 @@ class CloudSaver:
         async with self._lk:
             if self._tok:
                 return
-            for path in ("/user/login", "/api/user/login"):
+            tried = []
+            for path in self.LOGIN_PATHS:
                 r = await self._c.post(_base() + path, json={"username": cfg.CLOUDSAVER_USER, "password": cfg.CLOUDSAVER_PASS})
-                if r.status_code == 404:
-                    continue
                 try:
                     j = r.json()
                 except Exception:  # noqa
-                    raise RuntimeError(f"登录返回的不是 JSON（HTTP {r.status_code}），请确认地址指向 CloudSaver")
+                    tried.append(f"{path}→HTTP {r.status_code}（不是 JSON）")
+                    continue
                 tok = find_token(j)
                 if tok:
                     self._tok = tok
                     return
-                raise RuntimeError("CloudSaver 登录失败：" + str(j.get("message") or j)[:100])
-            raise RuntimeError("找不到 CloudSaver 登录接口（404），请确认地址和版本")
+                if r.status_code in (404, 405):
+                    tried.append(f"{path}→HTTP {r.status_code}")
+                    continue
+                raise RuntimeError("CloudSaver 登录失败：" + str(j.get("message") or j)[:100] + "（检查用户名和密码）")
+            raise RuntimeError("找不到可用的 CloudSaver 登录接口，试过：" + "；".join(tried) + "。请确认地址指向 CloudSaver")
+
+    async def _get(self, keyword: str):
+        paths = [self._search_path] if self._search_path else list(self.SEARCH_PATHS)
+        tried = []
+        for path in paths:
+            r = await self._c.get(_base() + path, params={"keyword": keyword}, headers={"Authorization": "Bearer " + self._tok})
+            if r.status_code in (401, 403):
+                return r, path
+            if r.status_code in (404, 405):
+                tried.append(f"{path}→HTTP {r.status_code}")
+                continue
+            try:
+                r.json()
+            except Exception:  # noqa
+                tried.append(f"{path}→HTTP {r.status_code}（不是 JSON）")
+                continue
+            self._search_path = path
+            return r, path
+        raise RuntimeError("找不到 CloudSaver 搜索接口，试过：" + "；".join(tried))
 
     async def search(self, keyword: str) -> list[dict]:
         if not self._tok:
             await self._login()
         for attempt in (0, 1):
-            r = await self._c.get(_base() + "/api/search", params={"keyword": keyword},
-                                  headers={"Authorization": "Bearer " + self._tok})
+            r, _ = await self._get(keyword)
             if r.status_code in (401, 403) and attempt == 0:
                 self._tok = ""
                 await self._login()
