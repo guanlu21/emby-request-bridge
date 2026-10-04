@@ -944,6 +944,78 @@ class SearchDepthPriorityTest(unittest.TestCase):
         self.assertEqual([x["reason"] for x in rep["rejects"]], ["年份不符"])         # 被过滤的也留着，可以强制使用
 
 
+class PersonAndPurgeTest(unittest.TestCase):
+    def test_person_search_and_credits(self):
+        import asyncio as aio
+        from app import tmdb
+
+        async def fake_get(path, **kw):
+            if path == "/search/multi":
+                if kw.get("page", 1) > 1:
+                    return {"results": []}
+                return {"results": [
+                    {"media_type": "movie", "id": 1, "title": "唐人街探案", "release_date": "2015-12-31", "popularity": 5},
+                    {"media_type": "person", "id": 77, "name": "王宝强", "known_for_department": "Acting", "profile_path": "/p.jpg",
+                     "popularity": 30, "known_for": [{"title": "唐人街探案"}, {"name": "士兵突击"}]},
+                    {"media_type": "person", "id": 78, "name": "路人", "known_for_department": "Acting", "popularity": 1, "known_for": []}]}
+            if path == "/person/77":
+                return {"name": "王宝强", "profile_path": "/p.jpg", "known_for_department": "Acting"}
+            if path == "/person/77/combined_credits":
+                return {"cast": [
+                    {"media_type": "movie", "id": 1, "title": "唐人街探案", "release_date": "2015-12-31", "character": "秦风", "popularity": 9, "genre_ids": [35]},
+                    {"media_type": "tv", "id": 2, "name": "士兵突击", "first_air_date": "2006-09-01", "character": "许三多", "popularity": 8, "genre_ids": [18]},
+                    {"media_type": "tv", "id": 3, "name": "某脱口秀", "first_air_date": "2020-01-01", "character": "Self", "popularity": 3, "genre_ids": [10767]},
+                    {"media_type": "movie", "id": 4, "title": "客串", "release_date": "2019-01-01", "character": "本人", "popularity": 2, "genre_ids": [99]}],
+                    "crew": [{"media_type": "movie", "id": 1, "title": "唐人街探案", "job": "Director"},
+                             {"media_type": "movie", "id": 5, "title": "大闹天竺", "release_date": "2017-01-27", "job": "Director", "popularity": 4},
+                             {"media_type": "movie", "id": 6, "title": "编剧作品", "job": "Writer"}]}
+            return {}
+        orig = tmdb.get
+        tmdb.get = fake_get
+        try:
+            items = aio.run(tmdb.search("王宝强"))
+            self.assertEqual([i["type"] for i in items], ["movie", "person", "person"])          # 人物按热度排，影片在前
+            self.assertEqual(items[1]["title"], "王宝强"); self.assertIn("士兵突击", items[1]["overview"])
+            d = aio.run(tmdb.person_credits(77))
+            self.assertEqual(d["person"]["name"], "王宝强")
+            self.assertEqual([w["title"] for w in d["works"]], ["大闹天竺", "唐人街探案", "士兵突击"])   # 日期从新到旧；脱口秀/本人客串/编剧都不要
+            by = {w["title"]: w for w in d["works"]}
+            self.assertEqual(by["唐人街探案"]["job"], "演员/导演"); self.assertEqual(by["唐人街探案"]["role"], "秦风")
+            self.assertEqual(by["大闹天竺"]["job"], "导演")
+        finally:
+            tmdb.get = orig
+
+    def test_purge_deletes_cloud_files_and_empty_folders_only(self):
+        import json
+        deleted, remaining = [], {"season": 0, "show": 1}      # 季目录删完文件就空了；片名目录里还有别的季，不能删
+
+        class D(FakeDrive):
+            async def delete(self, ids): deleted.append(list(ids))
+            async def list_files(self, cid):
+                return [] if str(cid) == "301" else [{"id": 1, "name": "x.mkv", "size": 1}]
+            async def list_dirs(self, cid): return []
+        pl = Pipeline(D(), None, None, None, poll=0)
+        rid = db.create("tv", 995, 2, "某剧 (2020)")
+        db.update(rid, status="done", placed=json.dumps({"dest": "301", "files": ["11", "12"], "chain": ["300", "301"]}))
+        n = asyncio.run(pl.purge(db.get(rid)))
+        self.assertEqual(n, 2)
+        self.assertEqual(deleted, [["11", "12"], ["301"]])                  # 先删文件，再删空的季目录；片名目录（300）里还有文件，保留
+        self.assertEqual(db.get(rid)["placed"], "")
+        self.assertEqual(asyncio.run(pl.purge(db.get(rid))), 0)             # 没有记录的文件：什么都不删
+
+    def test_source_table_has_scan_paths(self):
+        from app import litepan
+        from app.config import cfg
+        from app import settings
+        cfg.LITEPAN_SOURCE = "Emby求片-{category}"
+        settings.set_internal(library_root_label="影视")
+        t = {x["source"]: x["path"] for x in litepan.source_table()}
+        self.assertEqual(t["Emby求片-电影-国产"], "影视/电影/国产")
+        self.assertEqual(t["Emby求片-电视剧-国产剧"], "影视/电视剧/国产剧")
+        self.assertEqual(t["Emby求片-动漫"], "影视/动漫")
+        cfg.LITEPAN_SOURCE = "RequestBridge"
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")

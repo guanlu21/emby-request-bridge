@@ -245,10 +245,13 @@ class Pipeline:
         else:
             leaf = [classify.render(cfg.NAME_TV_DIR, v), classify.render(cfg.NAME_SEASON_DIR, v)]
         parts = cat + [x for x in leaf if x]
+        chain = []
         async with self._dest_lock:
             cid = self._library_cid(r)
             for p in parts:
                 cid = await self.drive.ensure_dir(cid, p)
+                chain.append(cid)
+        r["_chain"] = chain[len(cat):]  # 片名/季这几层，删除时空了就一起清理（分类目录不动）
         db.update(r["id"], category="-".join(cat) or ("电影" if r["media_type"] == "movie" else "电视剧"))
         db.log(r["id"], "入库位置：" + " / ".join(parts))
         return cid
@@ -267,6 +270,37 @@ class Pipeline:
                     await self.drive.delete([old["dest"]])
             except Exception:  # noqa
                 pass
+
+    async def _is_empty(self, cid) -> bool:
+        try:
+            if await self.drive.list_files(int(cid)):
+                return False
+            ld = getattr(self.drive, "list_dirs", None)
+            return not (ld and await ld(int(cid)))
+        except Exception:  # noqa
+            return False
+
+    async def purge(self, r) -> int:
+        """删除这条请求入库到网盘里的视频文件，并把因此变空的片名/季文件夹一起清掉。返回删除的文件数。
+        只删记录在案的文件（placed），不会碰目录里别的东西。"""
+        try:
+            placed = json.loads(r["placed"] or "null")
+        except ValueError:
+            placed = None
+        if not placed or not placed.get("files"):
+            return 0
+        await self.drive.delete(placed["files"])
+        for cid in reversed(placed.get("chain") or [placed["dest"]]):  # 从最里层往上，空了才删
+            if await self._is_empty(cid):
+                try:
+                    await self.drive.delete([cid])
+                except Exception:  # noqa
+                    break
+            else:
+                break
+        db.update(r["id"], placed="")
+        db.log(r["id"], f"已删除网盘里的 {len(placed['files'])} 个文件")
+        return len(placed["files"])
 
     async def rename_files(self, rid, files, r, meta, hint=""):
         """按命名模板改名（带 TMDB 编号等）；任何一步失败都只记日志，保留原文件名，不影响入库。"""
@@ -355,7 +389,8 @@ class Pipeline:
                     await self.remove_placed(xid, replace_old, dest)
                 await self.rename_files(xid, fl, x, meta, c.title)
                 await self.drive.move([f["id"] for f in fl], dest)
-                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl]}))
+                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl],
+                                                  "chain": [str(c) for c in x.pop("_chain", [dest])]}))
                 placed.add(x["season"])
             return placed
         except SetupError:

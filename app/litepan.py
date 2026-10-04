@@ -51,6 +51,25 @@ def all_sources() -> list[str]:
     return out
 
 
+def source_table() -> list[dict]:
+    """每个来源对应的分类、以及 LitePan 里那条联动的 STRM 任务应该扫描的目录路径（影视根目录/分类目录）。"""
+    try:
+        root = cfg.LIBRARY_ROOT_LABEL or "影视根目录"
+    except AttributeError:
+        root = "影视根目录"
+    cats = [[cfg.DIR_MOVIE, r] for r in classify.region_names()] + \
+           [[cfg.DIR_TV, r + cfg.TV_SUFFIX] for r in classify.region_names()] + \
+           [[cfg.DIR_ANIME], [cfg.DIR_VARIETY], [cfg.DIR_DOC]]
+    out, seen = [], set()
+    for c in cats:
+        s = source_for("-".join(c))
+        key = (s, "/".join(c))
+        if key not in seen:
+            seen.add(key)
+            out.append({"source": s, "category": "-".join(c), "path": "/".join([root] + c)})
+    return out
+
+
 def _body(event: str, message: str, source: str) -> dict:
     body = {"event": event, "message": message or f"{event}，请执行联动"}
     if source:

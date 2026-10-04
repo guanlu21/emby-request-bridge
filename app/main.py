@@ -122,6 +122,23 @@ def me(request: Request, x_token: str = Header("")):
 
 
 # ---------- 搜索与求片 ----------
+async def annotate(items: list[dict], limit: int = 80):
+    """给影片加上「已入库 / 已有人求片」状态（人物跳过）。Emby 查询并发 8 个，只查前 limit 个。"""
+    sem = asyncio.Semaphore(8)
+
+    async def one(it):
+        if it["type"] == "person":
+            return
+        async with sem:
+            it["in_library"] = await emby.has_item(it["type"], it["id"])
+        it["requested"] = db.status_of(it["type"], it["id"])
+
+    await asyncio.gather(*[one(it) for it in items[:limit]])
+    for it in items[limit:]:
+        if it["type"] != "person":
+            it["in_library"], it["requested"] = False, db.status_of(it["type"], it["id"])
+
+
 @app.get("/api/search")
 async def search(request: Request, q: str = "", x_token: str = Header("")):
     who(request, x_token)
@@ -131,11 +148,20 @@ async def search(request: Request, q: str = "", x_token: str = Header("")):
         items = await tmdb.search(q.strip())
     except Exception as e:  # noqa
         raise HTTPException(502, f"TMDB 搜索失败：{e}")
-    have = await asyncio.gather(*[emby.has_item(i["type"], i["id"]) for i in items])
-    for it, h in zip(items, have):
-        it["in_library"] = h
-        it["requested"] = db.status_of(it["type"], it["id"])
+    await annotate(items)
     return items
+
+
+@app.get("/api/person/{pid}")
+async def person(pid: int, request: Request, x_token: str = Header("")):
+    """人物页：他参演/导演的全部影视作品（带入库、求片状态），点作品就能求片。"""
+    who(request, x_token)
+    try:
+        d = await tmdb.person_credits(pid)
+    except Exception as e:  # noqa
+        raise HTTPException(502, f"TMDB 查询失败：{e}")
+    await annotate(d["works"], 100)
+    return d
 
 
 @app.get("/api/tv/{tv_id}")
@@ -193,11 +219,22 @@ async def batch(request: Request, x_token: str = Header("")):
     action = body.get("action")
     if action not in ("approve", "reject", "retry", "reset", "delete"):
         raise HTTPException(400, "bad action")
+    purged = 0
+    if action == "delete" and body.get("purge"):
+        # 同时删除网盘里这些请求入库的文件：先删网盘，成功了才删记录；网盘出错就整体停下，记录原样保留，可以重试
+        for rid in body.get("ids", []):
+            r = db.get(rid)
+            if not r or r["status"] in ("queued", "searching", "downloading"):
+                continue
+            try:
+                purged += await pipe.purge(r)
+            except Exception as e:  # noqa
+                raise HTTPException(502, f"删除网盘文件失败（记录没有删除）：{e}")
     done = db.batch(body.get("ids", []), action)
     if action in ("approve", "retry", "reset"):
         for rid in db.leaders(done):
             spawn(rid)
-    return {"done": done}
+    return {"done": done, "purged": purged}
 
 
 @app.post("/api/requests/{rid}/retry")
@@ -356,7 +393,7 @@ async def trigger_litepan(request: Request, x_token: str = Header("")):
 @app.get("/api/settings/litepan/sources")
 def litepan_sources(request: Request, x_token: str = Header("")):
     admin(request, x_token)
-    return {"event": cfg.LITEPAN_EVENT, "sources": litepan.all_sources()}
+    return {"event": cfg.LITEPAN_EVENT, "sources": litepan.all_sources(), "table": litepan.source_table()}
 
 
 @app.get("/api/settings/token")

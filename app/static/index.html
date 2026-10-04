@@ -41,6 +41,14 @@ small{color:var(--mut)}
 .card h4{margin:0;font-size:14px;line-height:1.3}
 .card .btn{width:100%;padding:6px}
 .empty{color:var(--mut);padding:40px 0;text-align:center}
+.pbar{display:flex;align-items:center;gap:12px;margin:0 0 14px;flex-wrap:wrap}
+.ptitle{font-size:13px;color:var(--mut);margin:0 0 6px}
+.prow{display:flex;gap:14px;overflow-x:auto;padding:4px 0 14px;scrollbar-width:thin}
+.pcard{flex:none;width:96px;border:0;background:none;text-align:center;cursor:pointer;padding:0;color:inherit}
+.pcard .av{width:76px;height:76px;border-radius:50%;margin:0 auto 6px;background:var(--line);overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:26px;color:var(--mut)}
+.pcard .av img{width:100%;height:100%;object-fit:cover}
+.pcard b{display:block;font-size:13px;font-weight:500;line-height:1.3}
+.pcard small{display:block;font-size:11px;line-height:1.3}
 /* 列表（桌面是表格，手机变卡片） */
 .wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mut);font-weight:500}
@@ -150,9 +158,11 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 </section>
 
 <section id="v-search" class="hide">
-  <div class="sbar"><input id="q" type="text" placeholder="影片或剧集名称，可加年份，如：流浪地球 2019" enterkeyhint="search" onkeydown="if(event.key=='Enter')search()">
+  <div class="sbar"><input id="q" type="text" placeholder="影片、剧集或人物名称，可加年份，如：流浪地球 2019" enterkeyhint="search" onkeydown="if(event.key=='Enter')search()">
     <button class="btn pri" onclick="search()" style="white-space:nowrap">搜索</button></div>
-  <div id="grid" class="grid"></div><div id="sempty" class="empty">搜索后选择一部影片，点「求片」即可。</div>
+  <div id="pbar" class="pbar hide"><button class="btn" onclick="backPerson()">← 返回搜索结果</button><b id="pname"></b></div>
+  <div id="people"></div>
+  <div id="grid" class="grid"></div><div id="sempty" class="empty">搜索后选择一部影片，点「求片」即可。也可以搜演员、导演的名字，看他的全部作品。</div>
 </section>
 
 <section id="v-mine" class="hide"><div class="wrap"><table class="rt"><thead><tr><th>片名</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="mine"></tbody></table></div>
@@ -176,6 +186,9 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 </section>
 </main>
 
+<dialog id="ddlg"><h3 style="margin-top:0">删除选中的请求</h3><p id="dtxt" style="margin:0 0 10px"></p>
+  <label style="align-items:flex-start"><input type="checkbox" id="dpurge" style="margin-top:4px"><span>同时删除 <b>115 网盘里已入库的文件</b><br><small>只删这些请求入库的视频文件，因此变空的片名/季文件夹一并清理；不可恢复（是否进回收站取决于 115）。LitePan 生成的 STRM 文件不会被删，需要在 LitePan 里另行清理。</small></span></label>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="$('ddlg').close()">取消</button><button class="btn pri" id="dok2" onclick="doDelete()">确认删除</button></div></dialog>
 <dialog id="dlg"><h3 id="dt" style="margin-top:0"></h3><div id="dseasons"></div>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="dlg.close()">取消</button><button class="btn pri" id="dok">确认求片</button></div></dialog>
 <dialog id="qdlg"><h3 style="margin-top:0">扫码授权 115</h3><div id="qrbox"></div>
@@ -238,7 +251,14 @@ async function login(){
 async function logout(){await api('/api/logout',{method:'POST'});showLogin()}
 
 /* ---- 搜索与求片 ---- */
+let PEOPLE=[],PREV=null;
+function renderPeople(){
+  $('people').innerHTML=PEOPLE.length?`<div class="ptitle">相关人物（点开看他的全部作品）</div><div class="prow">`+PEOPLE.map((p,i)=>
+    `<button class="pcard" onclick="openPerson(${i})"><div class="av">${p.poster?`<img loading="lazy" src="/img/w185/${esc(p.poster.slice(1))}" alt="">`:esc((p.title||'?').slice(0,1))}</div>
+     <b>${esc(p.title)}</b><small>${esc(p.dept==='Directing'?'导演':p.dept==='Acting'?'演员':p.dept||'')}</small></button>`).join('')+`</div>`:'';
+}
 function renderGrid(){
+  $('sempty').classList.toggle('hide',items.length>0||PEOPLE.length>0);
   $('grid').innerHTML=items.map((x,i)=>{
     const st=x.requested;let label='求片',dis=false;
     if(x.type=='movie'&&x.in_library){label='已入库';dis=true}
@@ -246,16 +266,28 @@ function renderGrid(){
     else if(BUSY.includes(st)){label='处理中';dis=true}
     else if(st=='done'&&x.type=='movie'){label='已完成';dis=true}
     else if(x.type=='tv'&&x.in_library)label='补季求片';
+    const sub=[x.year,x.job,x.role].filter(Boolean).join(' · ')||(x.rating?'评分 '+x.rating:'');
     return `<div class="card"><div class="poster">${x.poster?`<img loading="lazy" src="/img/w342/${esc(x.poster.slice(1))}" alt="">`:''}<span class="tag">${x.type=='movie'?'电影':'剧集'}</span></div>
-    <h4>${esc(x.title)}</h4><small>${esc(x.year)}${x.rating?' · 评分 '+x.rating:''}</small>
+    <h4>${esc(x.title)}</h4><small>${esc(sub)}</small>
     <button class="btn ${dis?'':'pri'}" ${dis?'disabled':''} onclick="ask(${i})">${label}</button></div>`}).join('');
 }
 async function search(){
   const q=$('q').value.trim();if(!q)return;
-  $('sempty').textContent='搜索中…';$('sempty').classList.remove('hide');$('grid').innerHTML='';
-  try{items=await api('/api/search?q='+encodeURIComponent(q))}catch(e){$('sempty').textContent=e.message;return}
-  $('sempty').textContent='没有找到，换个关键词试试。';$('sempty').classList.toggle('hide',items.length>0);
-  renderGrid();
+  $('sempty').textContent='搜索中…';$('sempty').classList.remove('hide');$('grid').innerHTML='';$('people').innerHTML='';
+  let all;try{all=await api('/api/search?q='+encodeURIComponent(q))}catch(e){$('sempty').textContent=e.message;return}
+  PEOPLE=all.filter(x=>x.type=='person');items=all.filter(x=>x.type!='person');PREV=null;$('pbar').classList.add('hide');
+  $('sempty').textContent='没有找到，换个关键词试试。';
+  renderPeople();renderGrid();
+}
+async function openPerson(i){
+  const p=PEOPLE[i];let d;
+  try{d=await api('/api/person/'+p.id)}catch(e){return toast(e.message)}
+  PREV={items,people:PEOPLE};items=d.works;PEOPLE=[];renderPeople();
+  $('pbar').classList.remove('hide');$('pname').textContent=`${d.person.name} · 共 ${d.works.length} 部作品`;
+  $('sempty').textContent='没有找到这个人的影视作品。';renderGrid();window.scrollTo(0,0);
+}
+function backPerson(){
+  if(!PREV)return;items=PREV.items;PEOPLE=PREV.people;PREV=null;$('pbar').classList.add('hide');renderPeople();renderGrid();
 }
 async function ask(i){
   const x=items[i];
@@ -366,9 +398,21 @@ function toggleAll(on){shown().forEach(x=>on?sel.add(x.id):sel.delete(x.id));ren
 function selAll(){const d=shown();toggleAll(!d.every(x=>sel.has(x.id)))}
 async function batch(action){
   if(!sel.size)return toast('先勾选要处理的请求');
-  if(action=='delete'&&!confirm('确定删除选中的记录？'))return;
-  const r=await api('/api/requests/batch',{method:'POST',body:{action,ids:[...sel]}});
-  toast(`已处理 ${r.done.length} 条`);sel.clear();$('all').checked=false;loadAdmin();
+  if(action=='delete'){
+    const n=data.filter(x=>sel.has(x.id)&&x.status=='done').length;
+    $('dtxt').textContent=`将删除选中的 ${sel.size} 条请求记录（其中 ${n} 条已入库）。`;$('dpurge').checked=false;$('ddlg').showModal();return;
+  }
+  try{const r=await api('/api/requests/batch',{method:'POST',body:{action,ids:[...sel]}});
+    toast(`已处理 ${r.done.length} 条`);sel.clear();$('all').checked=false;loadAdmin()}catch(e){toast(e.message)}
+}
+async function doDelete(){
+  const purge=$('dpurge').checked;
+  if(purge&&!confirm('将同时删除 115 网盘里这些请求入库的文件，不可恢复。确定？'))return;
+  $('dok2').disabled=true;
+  try{const r=await api('/api/requests/batch',{method:'POST',body:{action:'delete',ids:[...sel],purge}});
+    $('ddlg').close();toast(`已删除 ${r.done.length} 条记录`+(purge?`，网盘文件 ${r.purged} 个`:''));sel.clear();$('all').checked=false;loadAdmin()}
+  catch(e){toast(e.message)}
+  $('dok2').disabled=false;
 }
 
 
@@ -465,7 +509,8 @@ async function triggerLp(){
 }
 async function showSources(){
   try{const d=await api('/api/settings/litepan/sources');
-    out(`LitePan 里每个分类建一条联动：触发 = 收到通知「${d.event}」，来源如下（一条联动对应一个来源，STRM 任务只扫对应目录）：\n\n`+d.sources.join('\n'))}catch(e){out(e.message)}
+    out(`LitePan 里每个分类建一条联动：触发 = 第三方通知「${d.event}」+ 下面的来源；联动里的 STRM 任务只扫描对应目录（也可以把 Emby 扫库选成对应的媒体库）：\n\n`+
+        d.table.map(x=>`来源 ${x.source||'（不带来源）'}\n    → STRM 任务扫描目录：${x.path}`).join('\n'))}catch(e){out(e.message)}
 }
 async function showTok(){try{$('tokv').textContent=(await api('/api/settings/token')).token}catch(e){toast(e.message)}}
 async function resetTok(){
