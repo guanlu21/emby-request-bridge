@@ -41,6 +41,8 @@ small{color:var(--mut)}
 .card h4{margin:0;font-size:14px;line-height:1.3}
 .card .btn{width:100%;padding:6px}
 .empty{color:var(--mut);padding:40px 0;text-align:center}
+.tm{display:grid;gap:1px;font-size:12px;color:var(--mut);line-height:1.5}
+.tm span{white-space:nowrap}
 .pbar{display:flex;align-items:center;gap:12px;margin:0 0 14px;flex-wrap:wrap}
 .ptitle{font-size:13px;color:var(--mut);margin:0 0 6px}
 .prow{display:flex;gap:14px;overflow-x:auto;padding:4px 0 14px;scrollbar-width:thin}
@@ -77,7 +79,7 @@ details pre{white-space:pre-wrap;margin:4px 0;color:var(--mut);font:12px/1.5 inh
 .seg button{border:0;background:var(--sf);padding:7px 18px;cursor:pointer}.seg button.on{background:var(--ac);color:var(--acfg)}
 code{word-break:break-all}
 .adm{table-layout:fixed}
-.adm th:nth-child(1){width:34px}.adm th:nth-child(3){width:90px}.adm th:nth-child(4){width:150px}.adm th:nth-child(5){width:26%}.adm th:nth-child(6){width:120px}
+.adm th:nth-child(1){width:34px}.adm th:nth-child(3){width:84px}.adm th:nth-child(4){width:150px}.adm th:nth-child(5){width:130px}.adm th:nth-child(6){width:22%}.adm th:nth-child(7){width:112px}
 .adm td{overflow-wrap:anywhere}
 .adm td.op{display:flex;flex-direction:column;gap:6px}
 .adm td.op .btn{padding:4px 8px;font-size:13px;white-space:nowrap}
@@ -165,7 +167,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
   <div id="grid" class="grid"></div><div id="sempty" class="empty">搜索后选择一部影片，点「求片」即可。也可以搜演员、导演的名字，看他的全部作品。</div>
 </section>
 
-<section id="v-mine" class="hide"><div class="wrap"><table class="rt"><thead><tr><th>片名</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="mine"></tbody></table></div>
+<section id="v-mine" class="hide"><div class="wrap"><table class="rt"><thead><tr><th>片名</th><th>时间</th><th>状态</th><th>已选资源</th></tr></thead><tbody id="mine"></tbody></table></div>
   <div id="mempty" class="empty hide">还没有求过片。</div></section>
 
 <section id="v-admin" class="hide">
@@ -177,7 +179,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button>
   </div>
   <small id="cnt"></small>
-  <div class="wrap" style="margin-top:8px"><table class="rt adm"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="wrap" style="margin-top:8px"><table class="rt adm"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>时间</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 
 <section id="v-set" class="hide">
@@ -210,6 +212,17 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const NAME={pending:'待审批',queued:'排队中',searching:'搜索中',downloading:'下载中',done:'已完成',failed:'失败',rejected:'已拒绝'};
 const BUSY=['queued','searching','downloading'];
+const pad=n=>String(n).padStart(2,'0');
+function fmt(t){
+  if(!t)return '';
+  const d=new Date(t*1000),now=new Date(),s=`${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.getFullYear()==now.getFullYear()?s:d.getFullYear()+'-'+s;
+}
+/* 求片 / 审批 / 完成时间，三行 */
+function times(x){
+  const ap=x.status=='rejected'?'已拒绝':(x.approved_at?fmt(x.approved_at)+(x.approved_by?` <small>${esc(x.approved_by)}</small>`:''):'待审批');
+  return `<div class="tm"><span>求片 ${fmt(x.created)}</span><span>审批 ${ap}</span>${x.done_at?`<span>完成 ${fmt(x.done_at)}</span>`:''}</div>`;
+}
 const pill=s=>`<span class="pill s-${s}">${NAME[s]||s}</span>`;
 let me=null,items=[],data=[],sel=new Set(),timer=null;
 
@@ -315,6 +328,7 @@ async function loadMine(){
   const d=await api('/api/requests');
   $('mempty').classList.toggle('hide',d.length>0);
   $('mine').innerHTML=d.map(x=>`<tr><td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}</td>
+    <td data-l="时间">${times(x)}</td>
     <td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td></tr>`).join('');
 }
 
@@ -333,7 +347,7 @@ function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
   <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
-  <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
+  <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
   <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
 }
 
@@ -418,22 +432,24 @@ async function doDelete(){
 
 /* ---- 设置：按类别分组，一次只显示一组 ---- */
 let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false,ACTIVE='';
-const CATS=[['连接',['Emby','115 网盘','资源搜索','代理与 TMDB']],['入库',['入库分类','命名格式','LitePan 联动']],['规则',['选源规则','关键词筛选','审批与限额']]];
-const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115 分享链接）和纸鸢磁力（磁力）。',
+const CATS=[['连接',['Emby','115 网盘','夸克网盘','资源搜索','代理与 TMDB']],['入库',['入库分类','命名格式','LitePan 联动']],['规则',['选源规则','关键词筛选','审批与限额']]];
+const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','夸克网盘':'夸克的 Cookie 和两个目录。夸克只能转存分享链接（没有磁力离线下载）；不设就不会使用夸克。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115/夸克分享链接）、电影港（磁力+分享）和纸鸢磁力（磁力）。',
   '代理与 TMDB':'TMDB 搜索和海报用的代理与接口地址。','入库分类':'下载完成后按 TMDB 信息自动放进哪些目录。','命名格式':'文件夹和文件的命名模板，默认带 TMDB 编号。',
   'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。'};
 const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
     <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
     <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
-  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
+  '夸克网盘':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testQuark()">测试夸克连接</button></div>`,
+  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testDyg()">测试电影港</button><button class="btn" onclick="testHaisou()">测试海搜</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
   '代理与 TMDB':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testSet()">测试 TMDB 连通性</button></div>`,
   'LitePan 联动':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testLp()">测试连接</button><button class="btn" onclick="triggerLp()">手动触发联动</button><button class="btn" onclick="showSources()">联动来源清单</button></div>`};
 
+const lbKey=k=>k.replace('_cid','_label').replace('_fid','_label');
 function fieldHtml(f,d){
   const v=d.values[f.key],id='f_'+f.key;let inp='';
   if(f.type=='toggle')inp=`<div class="seg" id="${id}"><button data-v="1" class="${v?'on':''}" onclick="segSet(this)">开启</button><button data-v="0" class="${v?'':'on'}" onclick="segSet(this)">关闭</button></div>`;
   else if(f.type=='select')inp=`<select id="${id}">${f.options.map(([k,n])=>`<option value="${esc(k)}" ${k==v?'selected':''}>${esc(n)}</option>`).join('')}</select>`;
-  else if(f.type=='folder'){const lb=d.values[f.key.replace('_cid','_label')];FOLDER[f.key]={cid:v||0,label:lb||''};
+  else if(f.type=='folder'||f.type=='qfolder'){const lb=d.values[lbKey(f.key)];FOLDER[f.key]={cid:v||(f.type=='qfolder'?'':0),label:lb||''};
     inp=`<div style="display:flex;gap:8px"><input id="${id}" type="text" readonly placeholder="未选择" value="${esc(lb||(v?'目录 '+v:''))}"><button class="btn" onclick="pickFolder('${f.key}')">选择</button></div>`}
   else if(f.type=='password')inp=`<input id="${id}" type="password" autocomplete="new-password" placeholder="${d.secret_set[f.key]?'已配置；留空不修改':''}">`;
   else inp=`<input id="${id}" type="${f.type=='number'?'number':'text'}" ${f.type=='number'?'step="any" inputmode="decimal"':'autocapitalize="off"'} value="${esc(v)}">`;
@@ -475,7 +491,7 @@ function collect(){
   for(const g of SET.schema)for(const f of g.fields){
     const el=$('f_'+f.key);
     if(f.type=='toggle')o[f.key]=el.querySelector('.on')?.dataset.v=='1';
-    else if(f.type=='folder'){o[f.key]=FOLDER[f.key].cid;o[f.key.replace('_cid','_label')]=FOLDER[f.key].label}
+    else if(f.type=='folder'||f.type=='qfolder'){o[f.key]=FOLDER[f.key].cid;o[lbKey(f.key)]=FOLDER[f.key].label}
     else o[f.key]=el.value;
   }
   return o;
@@ -489,6 +505,19 @@ async function runTest(path,fmt,wait){
   out(wait||'测试中…');
   try{out(fmt(await api(path,{method:'POST'})))}catch(e){out(e.message)}
 }
+const testQuark=()=>runTest('/api/quark/test',r=>r.ok?`夸克连接正常，根目录下有 ${r.root_dirs} 个文件夹`:'失败：'+r.error);
+const testDyg=()=>runTest('/api/settings/dyg/test',r=>{
+  const lines=['电影港（dyg7.com）测试','搜索「流浪地球」：'+(r.search_ok?'成功':'没搜到（见下面每次尝试）'),...(r.attempts||[]).map(x=>'  · '+x)];
+  if(r.pages&&r.pages.length)lines.push('  搜到的影片页：'+r.pages.join('、'));
+  if(r.page)lines.push('',`影片页解析（${r.page}）：标题「${r.page_title||''}」${r.page_year?'，年代 '+r.page_year:''}，磁力 ${r.magnets} 个、夸克 ${r.quark} 个、115 ${r.s115} 个${r.sample?'；例：'+r.sample:''}`);
+  if(r.page_error)lines.push('影片页读取失败：'+r.page_error);
+  return lines.join('\n')});
+const testHaisou=()=>runTest('/api/settings/haisou/test',r=>{
+  if(!r.ok)return '失败：'+r.error;
+  const L=[`海搜测试：POST ${r.url} → HTTP ${r.status}`,`解析出 ${r.parsed} 个分享条目${(r.sample||[]).length?'，例：'+r.sample.join('；'):''}`,'','搜索返回的前 600 字：',r.raw||''];
+  if(r.fetch_status!==undefined)L.push('',`取链接 → HTTP ${r.fetch_status}，找到的链接：${(r.links||[]).join('、')||'无'}`,'返回的前 400 字：',r.fetch_raw||'');
+  if(r.fetch_error)L.push('','取链接失败：'+r.fetch_error);
+  return L.join('\n')});
 const testSet=()=>runTest('/api/settings/test',r=>r.ok?`TMDB 连接正常（${r.ms} ms）`:'失败：'+r.error);
 const testCs=()=>runTest('/api/settings/cloudsaver/test',r=>r.ok?`CloudSaver 连接正常：试搜「流浪地球」得到 ${r.count} 条 115 链接${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error,'测试中…（CloudSaver 搜索可能要十几秒）');
 const testKite=()=>runTest('/api/settings/kite/test',r=>{
@@ -519,10 +548,11 @@ async function resetTok(){
 }
 
 /* 115 目录选择 */
-async function pickFolder(key){await saveSet(true);FKEY=key;FSTACK=[{id:0,name:'根目录'}];$('fdlg').showModal();await fload()}
+async function pickFolder(key){await saveSet(true);FKEY=key;FSTACK=[{id:isQ(key)?'0':0,name:'根目录'}];$('fdlg').showModal();await fload()}
+const isQ=k=>k.startsWith('quark_');
 async function fload(){
   const cur=FSTACK[FSTACK.length-1];$('fpath').textContent=FSTACK.map(x=>x.name).join(' / ');$('flist').textContent='加载中…';
-  try{FLIST=await api('/api/p115/folders?cid='+cur.id);
+  try{FLIST=await api(isQ(FKEY)?'/api/quark/folders?fid='+encodeURIComponent(cur.id):'/api/p115/folders?cid='+cur.id);
     $('flist').innerHTML=FLIST.length?FLIST.map((x,i)=>`<button class="btn" onclick="fenter(${i})">${esc(x.name)}</button>`).join(''):'<small>这里没有子目录</small>'}
   catch(e){$('flist').textContent=e.message}
 }

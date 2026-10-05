@@ -35,12 +35,23 @@ SCHEMA = [
         F("tv_suffix", "电视剧地区目录后缀", help="电视剧地区目录 = 地区名 + 后缀，如 国产剧", default="剧"),
         F("keep_min_mb", "下载后保留的最小文件（MB）", "number", "只保留视频文件，小于它的（样片、花絮）直接删除", default=100),
     ]},
+    {"group": "夸克网盘", "fields": [
+        F("quark_cookie", "夸克 Cookie", "password", "浏览器登录 pan.quark.cn 后，在开发者工具里复制请求的 Cookie。夸克只能转存分享链接（没有磁力离线下载）；Cookie 会失效，失效后重新复制"),
+        F("quark_staging_fid", "夸克下载目录", "qfolder", "分享先转存到这里，过滤合格才移走；不要选要生成 STRM 的目录"),
+        F("quark_library_fid", "夸克影视根目录", "qfolder", "按分类（电影/国产…）放进这里；不设就不会使用夸克"),
+    ]},
     {"group": "资源搜索", "fields": [
         F("pansou_url", "PanSou 地址", help="例如 http://192.168.1.10:8888；留空则不搜分享链接"),
         F("cloudsaver_url", "CloudSaver 地址", help="例如 http://192.168.1.10:8008；它从 Telegram 等频道搜 115 分享链接。留空则不用"),
         F("cloudsaver_user", "CloudSaver 用户名"),
         F("cloudsaver_pass", "CloudSaver 密码", "password"),
         F("kite_url", "纸鸢磁力 MCP 地址", help="例如 https://magnet.kiteyuan.info/mcp，以纸鸢磁力「MCP」页面客户端配置里的 url 为准。它会聚合你在纸鸢里配置的国内磁力站（包括自定义规则的站点）"),
+        F("dyg_on", "启用电影港（dyg7.com）", "toggle", "从电影港的影片页取磁力、夸克、115 链接。页面里常写明「国语中字无水印」，匹配度比较高", default=True),
+        F("dyg_url", "电影港地址", help="网站换域名时在这里改", default="https://www.dyg7.com"),
+        F("haisou_on", "启用海搜（haisou.cc，实验）", "toggle", "夸克资源很多。接口的请求体和返回结构还没完全确认，默认关闭；先点「测试海搜」看返回，需要的话改下面两个请求体模板", default=False),
+        F("haisou_url", "海搜地址", default="https://haisou.cc"),
+        F("haisou_body", "海搜搜索请求体（JSON）", help="POST /api/v2/shares/search 的请求体，关键词位置写 {kw}。在浏览器开发者工具里看这个请求的 Payload 照着改", default='{"keyword": "{kw}", "page": 1, "size": 30}'),
+        F("haisou_fetch_body", "海搜取链接请求体（JSON）", help="POST /api/v2/shares/{id}/fetch 的请求体，没有就保持 {}", default="{}"),
         F("kite_token", "纸鸢磁力 MCP Token", "password", "在纸鸢磁力「MCP」页面生成（mcp__ 开头）"),
         F("kite_exclude", "纸鸢磁力：排除的搜索引擎", help="逗号分隔；结果里带有引擎/来源信息时，这些引擎的结果会被丢弃（默认排除综合匹配、快速搜索）", default="综合匹配,快速搜索"),
         F("kite_engine", "纸鸢磁力：指定搜索引擎（可选）", help="如 磁力帝；仅当 magnet_search 工具支持选择引擎时才会传过去，点「测试纸鸢磁力」可以看到工具有哪些参数"),
@@ -66,7 +77,9 @@ SCHEMA = [
         F("prefer_max_gb", "偏好区间上限（GB）", "number", default=3),
         F("search_depth", "搜索深度", "select", "越深，用的关键词越多、各搜索源返回的条数越多（也更慢）；某条请求搜不到想要的，还可以在「候选/替换」里单独做一次最深的搜索",
           [["1", "1 普通"], ["2", "2 深入（默认）"], ["3", "3 最深"]], "2"),
-        F("priority", "候选优先级顺序", help="从前到后逐项比较，靠前的更重要。可用项：year 年份吻合、quality 画质（1080p 最优）、keywords 优先关键词、size 体积合适、source 分享链接优先、seeders 做种数；电视剧始终先看覆盖了几季", default="year,quality,keywords,size,source,seeders"),
+        F("drive_prefer", "优先使用的网盘", "select", "两个网盘都配置了、又都有资源时，优先用哪个（只是优先，另一个照样会用来补缺）",
+          [["any", "不限"], ["115", "115"], ["quark", "夸克"]], "any"),
+        F("priority", "候选优先级顺序", help="从前到后逐项比较，靠前的更重要。可用项：chinese 中文名称（标题里有中文片名的优先）、year 年份吻合、quality 画质（1080p 最优）、drive 优先的网盘、keywords 优先关键词、size 体积合适、source 分享链接优先、seeders 做种数；电视剧始终先看覆盖了几季", default="chinese,year,quality,drive,keywords,size,source,seeders"),
         F("max_attempts", "每个请求最多尝试几个资源", "number", default=8),
         F("offline_timeout", "单个资源离线等待上限（秒）", "number", "磁力在 115 上一直下不完（死种）时，等这么久就换下一个；热门资源通常几分钟内完成", default=600),
     ]},
@@ -107,8 +120,8 @@ def _defaults() -> dict:
     d = {}
     for k, f in FIELDS.items():
         d[k] = getattr(_Env, k.upper(), f["default"])
-        if f["type"] == "folder":
-            d[k.replace("_cid", "_label")] = ""
+        if f["type"] in ("folder", "qfolder"):
+            d[k.replace("_cid", "_label").replace("_fid", "_label")] = ""
     d.update(p115_access="", p115_refresh="", p115_expires=0, token="")
     return d
 
@@ -158,6 +171,10 @@ def save(new: dict) -> dict:
         elif t == "folder":
             cur[k] = int(v or 0)
             cur[k.replace("_cid", "_label")] = str(new.get(k.replace("_cid", "_label"), "") or "")
+        elif t == "qfolder":
+            lk = k.replace("_fid", "_label")
+            cur[k] = str(v or "").strip()
+            cur[lk] = str(new.get(lk, "") or "")
         else:
             cur[k] = v.strip() if isinstance(v, str) else v
             if k == "emby_url":
@@ -181,8 +198,8 @@ def public() -> dict:
     # 115 目录 ID 有 19 位，超出浏览器 JSON 数字的精度（约 16 位），必须以字符串返回
     values = {k: ("" if k in SECRET else (str(cur[k]) if FIELDS[k]["type"] == "folder" else cur[k])) for k in FIELDS}
     for k, f in FIELDS.items():
-        if f["type"] == "folder":
-            lk = k.replace("_cid", "_label")
+        if f["type"] in ("folder", "qfolder"):
+            lk = k.replace("_cid", "_label").replace("_fid", "_label")
             values[lk] = cur.get(lk, "")
     return {"schema": SCHEMA, "values": values, "secret_set": {k: bool(cur[k]) for k in SECRET}}
 

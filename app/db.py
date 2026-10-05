@@ -28,7 +28,8 @@ def conn():
             tried TEXT DEFAULT '[]', log TEXT DEFAULT '[]', created REAL, updated REAL)""")
         cols = [r[1] for r in _conn.execute("PRAGMA table_info(requests)")]
         for col, ddl in (("cands", "TEXT DEFAULT '[]'"), ("placed", "TEXT DEFAULT ''"), ("category", "TEXT DEFAULT ''"),
-                         ("grp", "INTEGER DEFAULT 0"), ("rejects", "TEXT DEFAULT '[]'"), ("cands_at", "REAL DEFAULT 0")):
+                         ("grp", "INTEGER DEFAULT 0"), ("rejects", "TEXT DEFAULT '[]'"), ("cands_at", "REAL DEFAULT 0"),
+                         ("approved_at", "REAL DEFAULT 0"), ("approved_by", "TEXT DEFAULT ''"), ("done_at", "REAL DEFAULT 0")):
             if col not in cols:
                 _conn.execute(f"ALTER TABLE requests ADD COLUMN {col} {ddl}")
         if "emby_user_id" not in cols:
@@ -46,9 +47,11 @@ def create(media_type, tmdb_id, season, title, requester="", status="queued", em
                         " AND status NOT IN ('failed','rejected')", (media_type, tmdb_id, season)).fetchone()
         if dup:
             return None
-        cur = c.execute("INSERT INTO requests(media_type,tmdb_id,season,title,status,requester,emby_user_id,created,updated)"
-                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                        (media_type, tmdb_id, season, title, status, requester, emby_user_id, time.time(), time.time()))
+        now = time.time()
+        auto = status == "queued"  # 不需要人工审批，创建的同时就算批准了
+        cur = c.execute("INSERT INTO requests(media_type,tmdb_id,season,title,status,requester,emby_user_id,created,updated,approved_at,approved_by)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (media_type, tmdb_id, season, title, status, requester, emby_user_id, now, now, now if auto else 0, "自动批准" if auto else ""))
         c.commit()
         return cur.lastrowid
 
@@ -112,12 +115,13 @@ def promote(media_type, tmdb_id, season):
                       " AND status='pending'", (media_type, tmdb_id, season)).fetchone()
         if not r:
             return None
-        c.execute("UPDATE requests SET status='queued', updated=? WHERE id=?", (time.time(), r["id"]))
+        c.execute("UPDATE requests SET status='queued', updated=?, approved_at=?, approved_by=? WHERE id=?",
+                  (time.time(), time.time(), "Seerr", r["id"]))
         c.commit()
         return r["id"]
 
 
-def batch(ids, action):
+def batch(ids, action, by=""):
     """approve/reject 只作用于待审批；retry 只作用于失败/已拒绝；delete 作用于非进行中的记录。返回受影响的 id。"""
     rules = {"approve": ("pending", "queued"), "reject": ("pending", "rejected"),
              "retry": ("failed,rejected", "queued"), "reset": ("failed,rejected", "queued")}
@@ -137,6 +141,8 @@ def batch(ids, action):
                 if r["status"] not in src.split(","):
                     continue
                 c.execute("UPDATE requests SET status=?, updated=? WHERE id=?", (dst, time.time(), i))
+                if action == "approve" or (r["status"] == "rejected" and dst == "queued"):  # 批准（含把已拒绝的重新放行）
+                    c.execute("UPDATE requests SET approved_at=?, approved_by=? WHERE id=?", (time.time(), by, i))
                 if action == "reset":
                     c.execute("UPDATE requests SET tried='[]', error='' WHERE id=?", (i,))
             done.append(i)

@@ -38,17 +38,20 @@ def source_for(category: str) -> str:
     return (cfg.LITEPAN_SOURCE or "").replace("{category}", category or "").strip("-")
 
 
+def _drives() -> list[tuple[str, str]]:
+    """启用了哪些网盘 → [(来源里的前缀, 目录路径里的前缀)]。115 是默认的，夸克的来源前面加「夸克-」。"""
+    out = [("", "")]
+    try:
+        if cfg.QUARK_COOKIE and cfg.QUARK_LIBRARY_FID:
+            out.append(("夸克-", "夸克:"))
+    except AttributeError:
+        pass
+    return out
+
+
 def all_sources() -> list[str]:
     """当前设置下会用到的全部联动来源（给你在 LitePan 里逐个建联动时对照）。"""
-    cats = [[cfg.DIR_MOVIE, r] for r in classify.region_names()] + \
-           [[cfg.DIR_TV, r + cfg.TV_SUFFIX] for r in classify.region_names()] + \
-           [[cfg.DIR_ANIME], [cfg.DIR_VARIETY], [cfg.DIR_DOC]]
-    out = []
-    for c in cats:
-        s = source_for("-".join(c))
-        if s not in out:
-            out.append(s)
-    return out
+    return list(dict.fromkeys(x["source"] for x in source_table()))
 
 
 def source_table() -> list[dict]:
@@ -57,16 +60,22 @@ def source_table() -> list[dict]:
         root = cfg.LIBRARY_ROOT_LABEL or "影视根目录"
     except AttributeError:
         root = "影视根目录"
+    try:
+        qroot = cfg.QUARK_LIBRARY_LABEL or "影视根目录"
+    except AttributeError:
+        qroot = "影视根目录"
     cats = [[cfg.DIR_MOVIE, r] for r in classify.region_names()] + \
            [[cfg.DIR_TV, r + cfg.TV_SUFFIX] for r in classify.region_names()] + \
            [[cfg.DIR_ANIME], [cfg.DIR_VARIETY], [cfg.DIR_DOC]]
     out, seen = [], set()
-    for c in cats:
-        s = source_for("-".join(c))
-        key = (s, "/".join(c))
-        if key not in seen:
-            seen.add(key)
-            out.append({"source": s, "category": "-".join(c), "path": "/".join([root] + c)})
+    for prefix, pp in _drives():
+        for c in cats:
+            s = source_for(prefix + "-".join(c))
+            key = (s, "/".join(c), prefix)
+            if key not in seen:
+                seen.add(key)
+                out.append({"source": s, "category": prefix + "-".join(c),
+                            "path": (f"夸克网盘：{qroot}" if prefix else root) + "/" + "/".join(c)})
     return out
 
 

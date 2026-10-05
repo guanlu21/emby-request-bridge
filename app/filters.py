@@ -231,6 +231,32 @@ def name_hit(result_title: str, names: list[str]) -> bool:
     return False
 
 
+def has_cjk(s: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", s or ""))
+
+
+def chinese_rank(title: str, names: list[str]) -> int:
+    """2 = 标题里有完整的中文片名；1 = 标题里有中文（如「国语中字」）；0 = 全是外文。"""
+    zh = next((n for n in names if has_cjk(n)), "")
+    if zh and norm(zh) in norm(title):
+        return 2
+    return 1 if has_cjk(title) else 0
+
+
+def similarity(title: str, names: list[str]) -> float:
+    """标题和片名有多像（按相邻两字的重合度，0~1）：被过滤的资源里，把「差一点就匹配」的排到前面。"""
+    def bigrams(s):
+        k = norm(s)
+        return {k[i:i + 2] for i in range(len(k) - 1)} or set(k)
+    t = bigrams(title)
+    best = 0.0
+    for n in names:
+        b = bigrams(n)
+        if b:
+            best = max(best, len(b & t) / len(b))
+    return best
+
+
 def year_rank(title: str, names: list[str], year) -> int:
     """年份吻合度：2 = 同年；1 = 差一年；0 = 标题里没写年份（也可以考虑，只是排在后面）。"""
     try:
@@ -320,12 +346,14 @@ def magnet_size_ok(size: float, media_type: str, episodes: int, rules: Rules, mu
     return rules.keep_min <= size / episodes <= rules.max_size
 
 
-PRIORITY_DEFAULT = "year,quality,keywords,size,source,seeders"
-PRIORITY_LABELS = {"year": "年份吻合", "quality": "画质", "keywords": "优先关键词", "size": "体积合适", "source": "分享优先", "seeders": "做种数"}
+PRIORITY_DEFAULT = "chinese,year,quality,drive,keywords,size,source,seeders"
+PRIORITY_LABELS = {"chinese": "中文名称", "year": "年份吻合", "quality": "画质", "drive": "优先的网盘", "keywords": "优先关键词", "size": "体积合适", "source": "分享优先", "seeders": "做种数"}
 
 
 def priority_tuple(order: str, facts: dict) -> tuple:
     """按 order（逗号分隔，靠前的优先）依次比较各项；facts 里没有的项按 0 算。越大越优先。"""
     keys = [k.strip() for k in (order or PRIORITY_DEFAULT).split(",") if k.strip() in PRIORITY_LABELS]
+    if "chinese" not in keys:  # 以前保存的顺序里没有「中文名称」：默认它排第一（想改位置/去掉，在设置里重新排）
+        keys.insert(0, "chinese")
     keys += [k for k in PRIORITY_DEFAULT.split(",") if k not in keys]
     return tuple(facts.get(k, 0) for k in keys)

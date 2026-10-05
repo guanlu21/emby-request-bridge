@@ -15,6 +15,7 @@ import httpx
 from .config import cfg
 
 SHARE_115 = re.compile(r"https?://(?:www\.)?(?:115|115cdn|anxia)\.com/s/[A-Za-z0-9]+[^\s\"'<>)\]]*")
+SHARE_QUARK = re.compile(r"https?://pan\.quark\.cn/s/[A-Za-z0-9]+[^\s\"'<>)\]]*")
 PWD_RE = re.compile(r"(?:password|pwd|访问码|提取码|密码)\s*[=:：]?\s*([A-Za-z0-9]{4})", re.I)
 
 
@@ -56,7 +57,7 @@ def _walk(o):
 
 
 def parse_results(data) -> list[dict]:
-    """→ [{title, text, url, password}]，只保留 115 分享链接。"""
+    """→ [{title, text, url, password, provider}]，保留 115 和夸克的分享链接。"""
     out, seen = [], set()
     for it in _walk(data):
         title = str(it.get("title") or "").strip()
@@ -67,6 +68,9 @@ def parse_results(data) -> list[dict]:
         for l in links:
             raw = l if isinstance(l, str) else str(l.get("link") or l.get("url") or "")
             m = SHARE_115.search(raw)
+            provider = "115"
+            if not m:
+                m, provider = SHARE_QUARK.search(raw), "quark"
             if not m or m.group(0) in seen:
                 continue
             seen.add(m.group(0))
@@ -75,7 +79,7 @@ def parse_results(data) -> list[dict]:
                 pm = PWD_RE.search(raw) or PWD_RE.search(content)
                 pwd = pm.group(1) if pm else ""
             out.append({"title": title or content.strip().splitlines()[0][:80] if (title or content.strip()) else "",
-                        "text": content[:300], "url": m.group(0), "password": pwd})
+                        "text": content[:300], "url": m.group(0), "password": pwd, "provider": provider})
     return [x for x in out if x["title"]]
 
 

@@ -10,6 +10,7 @@ from .config import cfg
 from . import classify
 from .filters import Rules, assign_seasons, pick_best_file, select_files
 from . import sources
+from . import quark as quark_mod
 from .sources import Candidate, build_candidates, parse_115_share
 
 
@@ -19,12 +20,14 @@ class SetupError(Exception):
 
 def cand_dict(c: Candidate) -> dict:
     return {"title": c.title, "kind": c.kind, "src": c.src, "score": c.score, "url": c.url,
-            "password": c.password, "size": c.size, "seeders": c.seeders, "covers": c.covers, "tags": c.tags}
+            "password": c.password, "size": c.size, "seeders": c.seeders, "covers": c.covers, "tags": c.tags,
+            "provider": c.provider}
 
 
 def cand_from(d: dict) -> Candidate:
     return Candidate(d["kind"], d["title"], d["url"], d.get("password", ""), d.get("size", 0), d.get("seeders", 0),
-                     d.get("src", ""), score=d.get("score", 0), covers=d.get("covers", []), tags=d.get("tags", []))
+                     d.get("src", ""), provider=d.get("provider", "115"), score=d.get("score", 0), covers=d.get("covers", []),
+                     tags=d.get("tags", []))
 
 
 def rules() -> Rules:
@@ -33,10 +36,11 @@ def rules() -> Rules:
 
 
 class Pipeline:
-    def __init__(self, drive, meta_fn, search_fn, after_fn, poll=None):
+    def __init__(self, drive, meta_fn, search_fn, after_fn, poll=None, quark=None):
         self._dest_lock = asyncio.Lock()
         self._active = set()
         self.drive, self.meta_fn, self.search_fn, self.after_fn = drive, meta_fn, search_fn, after_fn
+        self.quark = quark  # 夸克驱动（可选）
         self.poll = cfg.POLL_SECONDS if poll is None else poll
 
     # ------------------------------------------------------------ 一组请求（电视剧一次求多季共用一组）
@@ -100,9 +104,7 @@ class Pipeline:
     async def _run_rows(self, rows):
         r = rows[0]
         try:
-            if not cfg.P115_STAGING_CID or not self._library_cid(r):
-                raise RuntimeError("还没有设置 115 的下载目录和「影视根目录」，请管理员到「设置 → 115 网盘 / 入库分类」里选择")
-            await self.preflight(r)
+            usable = await self.usable_providers(r)
             for x in rows:
                 db.update(x["id"], status="searching", error="")
             meta = await self._meta_for(rows)
@@ -117,11 +119,15 @@ class Pipeline:
                 if not cands:
                     for sm in report["samples"]:
                         self._log_all(rows, "例：" + sm)
-            if not getattr(self.drive, "can_receive_share", lambda: True)():
+            if "115" in usable and not getattr(self.drive, "can_receive_share", lambda: True)():
                 n = len(cands)
-                cands = [c for c in cands if c.kind != "share"]
+                cands = [c for c in cands if not (c.kind == "share" and c.provider == "115")]
                 if n != len(cands):
-                    self._log_all(rows, f"未配置 115 Cookie，跳过 {n - len(cands)} 个分享链接，只用磁力")
+                    self._log_all(rows, f"未配置 115 Cookie，跳过 {n - len(cands)} 个 115 分享链接")
+            n = len(cands)
+            cands = [c for c in cands if (c.provider if c.kind == "share" else "115") in usable]  # 磁力只能走 115 离线；夸克没配就不用夸克的分享
+            if n != len(cands):
+                self._log_all(rows, f"跳过 {n - len(cands)} 个需要未配置网盘的资源（已配置：{'、'.join('夸克' if p == 'quark' else p for p in usable)}）")
             self._log_all(rows, f"搜到 {len(raw)} 条，过滤后 {len(cands)} 个候选")
             for x in rows:
                 db.update(x["id"], status="downloading")
@@ -145,7 +151,7 @@ class Pipeline:
                     db.update(x["id"], tried=json.dumps(sorted(tried)))
                 for s in placed:
                     row = remaining.pop(s)
-                    db.update(row["id"], status="done", picked=c.title)
+                    db.update(row["id"], status="done", picked=c.title, done_at=time.time())
                     await self.after_fn(row)
             self._fail_all(list(remaining.values()), "所有候选均失败或没有符合条件的资源")
         except SetupError as e:
@@ -173,20 +179,57 @@ class Pipeline:
         finally:
             sources.DEPTH.reset(token)
 
+    # ------------------------------------------------------------ 网盘（115 / 夸克）
     @staticmethod
     def _library_cid(r) -> int:
-        """分类入库的根目录；没设就退回旧的电影/剧集目录。"""
+        """115 的影视根目录；没设就退回旧的电影/剧集目录。"""
         return cfg.LIBRARY_ROOT_CID or (cfg.P115_DEST_MOVIE_CID if r["media_type"] == "movie" else cfg.P115_DEST_TV_CID)
 
-    async def preflight(self, r):
-        """先确认 115 下载目录和入库目录能访问，别等下载完才发现目录 ID 不对。"""
-        for label, cid in (("下载目录", cfg.P115_STAGING_CID), ("影视根目录", self._library_cid(r))):
+    def _drive(self, provider: str):
+        return self.quark if provider == "quark" else self.drive
+
+    @staticmethod
+    def _staging(provider: str):
+        return str(cfg.QUARK_STAGING_FID) if provider == "quark" else cfg.P115_STAGING_CID
+
+    def _root(self, r, provider: str):
+        return str(cfg.QUARK_LIBRARY_FID) if provider == "quark" else self._library_cid(r)
+
+    def _configured(self, provider: str, r) -> bool:
+        if provider == "quark":
+            return self.quark is not None and quark_mod.configured()
+        return bool(cfg.P115_STAGING_CID and self._library_cid(r))
+
+    @staticmethod
+    def _cid(provider: str, v):
+        return str(v) if provider == "quark" else int(v)
+
+    async def preflight(self, r, provider: str = "115"):
+        """先确认下载目录和入库根目录能访问，别等下载完才发现目录 ID 不对。"""
+        name = "夸克" if provider == "quark" else "115"
+        drive = self._drive(provider)
+        for label, cid in (("下载目录", self._staging(provider)), ("影视根目录", self._root(r, provider))):
             try:
-                await self.drive.list_dirs(cid)
+                await drive.list_dirs(cid)
             except AttributeError:
                 return  # 测试用的假驱动没有 list_dirs
             except Exception as e:  # noqa
-                raise SetupError(f"115 {label}无法访问（{e}）。请到「设置 → 115 网盘 / 入库分类」重新选择该目录，并点「测试 115 连接」")
+                raise SetupError(f"{name} {label}无法访问（{e}）。请到「设置」里重新选择该目录，并点「测试 {name} 连接」")
+
+    async def usable_providers(self, r) -> list:
+        """哪些网盘配好了、目录也能访问。一个都没有就报错；有一个坏了不影响另一个。"""
+        ok, errs = [], []
+        for p in ("115", "quark"):
+            if not self._configured(p, r):
+                continue
+            try:
+                await self.preflight(r, p)
+                ok.append(p)
+            except SetupError as e:
+                errs.append(str(e))
+        if not ok:
+            raise SetupError("；".join(errs) or "还没有设置网盘：请到「设置」里配置 115（或夸克）的下载目录和影视根目录")
+        return ok
 
     async def run_manual(self, rid: int, url: str):
         await self.run_candidate(rid, url, replace=False)
@@ -203,7 +246,7 @@ class Pipeline:
                 except ValueError:
                     old = None
             db.update(rid, status="downloading", error="")
-            await self.preflight(r)
+            await self.usable_providers(r)
             meta = await self.meta_fn(r)
             url = url.strip()
             known = next((d for d in json.loads(r["cands"] or "[]") + json.loads(r["rejects"] or "[]") if d["url"] == url), None)
@@ -213,17 +256,19 @@ class Pipeline:
                     c.covers = list(c.covers) + [r["season"]]
             elif url.startswith("magnet:"):
                 c = Candidate("magnet", "手动指定", url, src="manual")
+            elif quark_mod.parse_quark_share(url):
+                c = Candidate("share", "手动指定", url, src="manual", provider="quark")
             elif parse_115_share(url):
                 c = Candidate("share", "手动指定", url, src="manual")
             else:
-                raise RuntimeError("只支持 magnet 磁力链接或 115 分享链接")
+                raise RuntimeError("只支持 magnet 磁力链接、115 分享链接或夸克分享链接")
             db.log(rid, ("替换为：" if replace else "手动指定资源：") + f"[{c.kind}] {c.title[:60]}")
             ok = await self.attempt(r, meta, c, replace_old=old)
             tried = set(json.loads(db.get(rid)["tried"]))
             tried.add(c.url)
             db.update(rid, tried=json.dumps(sorted(tried)))
             if ok:
-                db.update(rid, status="done", picked=c.title)
+                db.update(rid, status="done", picked=c.title, done_at=time.time())
                 await self.after_fn(r)
             elif replace and old:
                 db.update(rid, status="done", error="替换失败，原资源保留（详情看日志）")
@@ -236,10 +281,12 @@ class Pipeline:
             else:
                 db.update(rid, status="failed", error=str(e)[:200])
 
-    async def dest_dir(self, r, meta) -> int:
+    async def dest_dir(self, r, meta, provider: str = "115"):
         """分类目录 + 片名目录（+ 季目录），名字按命名模板。同一时刻只允许一个请求在建目录，避免重复。"""
+        drive = self._drive(provider)
         v = classify.vars_for(r, meta)
-        cat = classify.classify(r["media_type"], meta) if cfg.LIBRARY_ROOT_CID else []
+        use_root = cfg.QUARK_LIBRARY_FID if provider == "quark" else cfg.LIBRARY_ROOT_CID
+        cat = classify.classify(r["media_type"], meta) if use_root else []
         if r["media_type"] == "movie":
             leaf = [classify.render(cfg.NAME_MOVIE_DIR, v)]
         else:
@@ -247,41 +294,44 @@ class Pipeline:
         parts = cat + [x for x in leaf if x]
         chain = []
         async with self._dest_lock:
-            cid = self._library_cid(r)
+            cid = self._root(r, provider)
             for p in parts:
-                cid = await self.drive.ensure_dir(cid, p)
+                cid = await drive.ensure_dir(cid, p)
                 chain.append(cid)
         r["_chain"] = chain[len(cat):]  # 片名/季这几层，删除时空了就一起清理（分类目录不动）
-        db.update(r["id"], category="-".join(cat) or ("电影" if r["media_type"] == "movie" else "电视剧"))
-        db.log(r["id"], "入库位置：" + " / ".join(parts))
+        label = "-".join(cat) or ("电影" if r["media_type"] == "movie" else "电视剧")
+        db.update(r["id"], category=("夸克-" if provider == "quark" else "") + label)  # 联动来源按网盘+分类区分
+        db.log(r["id"], ("夸克 " if provider == "quark" else "") + "入库位置：" + " / ".join(parts))
         return cid
 
-    async def remove_placed(self, rid, old: dict, new_dest):
+    async def remove_placed(self, rid, old: dict, new_dest, new_provider: str = "115"):
         """替换成功前删除旧资源的文件；失败只记日志（可能留下重复文件，需要手动清理）。"""
+        op = old.get("provider", "115")
+        drive = self._drive(op)
         try:
-            await self.drive.delete(old["files"])
+            await drive.delete(old["files"])
             db.log(rid, f"已删除旧资源的 {len(old['files'])} 个文件")
         except Exception as e:  # noqa
-            db.log(rid, f"删除旧文件失败（请到 115 手动清理）：{e}")
+            db.log(rid, f"删除旧文件失败（请到网盘手动清理）：{e}")
             return
-        if str(old.get("dest")) != str(new_dest):  # 分类变了：旧目录空了就一并删掉
+        if str(old.get("dest")) != str(new_dest) or op != new_provider:  # 分类/网盘变了：旧目录空了就一并删掉
             try:
-                if not await self.drive.list_files(int(old["dest"])):
-                    await self.drive.delete([old["dest"]])
+                if not await drive.list_files(self._cid(op, old["dest"])):
+                    await drive.delete([old["dest"]])
             except Exception:  # noqa
                 pass
 
-    async def _is_empty(self, cid) -> bool:
+    async def _is_empty(self, cid, drive, provider: str = "115") -> bool:
         try:
-            if await self.drive.list_files(int(cid)):
+            if await drive.list_files(self._cid(provider, cid)):
                 return False
-            ld = getattr(self.drive, "list_dirs", None)
-            return not (ld and await ld(int(cid)))
+            ld = getattr(drive, "list_dirs", None)
+            return not (ld and await ld(self._cid(provider, cid)))
         except Exception:  # noqa
             return False
 
     async def purge(self, r) -> int:
-        """删除这条请求入库到网盘里的视频文件，并把因此变空的片名/季文件夹一起清掉。返回删除的文件数。
+        """删除这条请求入库到网盘（115 或夸克）里的视频文件，并把因此变空的片名/季文件夹一起清掉。返回删除的文件数。
         只删记录在案的文件（placed），不会碰目录里别的东西。"""
         try:
             placed = json.loads(r["placed"] or "null")
@@ -289,23 +339,25 @@ class Pipeline:
             placed = None
         if not placed or not placed.get("files"):
             return 0
-        await self.drive.delete(placed["files"])
+        provider = placed.get("provider", "115")
+        drive = self._drive(provider)
+        await drive.delete(placed["files"])
         for cid in reversed(placed.get("chain") or [placed["dest"]]):  # 从最里层往上，空了才删
-            if await self._is_empty(cid):
+            if await self._is_empty(cid, drive, provider):
                 try:
-                    await self.drive.delete([cid])
+                    await drive.delete([cid])
                 except Exception:  # noqa
                     break
             else:
                 break
         db.update(r["id"], placed="")
-        db.log(r["id"], f"已删除网盘里的 {len(placed['files'])} 个文件")
+        db.log(r["id"], f"已删除{'夸克' if provider == 'quark' else '115'}网盘里的 {len(placed['files'])} 个文件")
         return len(placed["files"])
 
-    async def rename_files(self, rid, files, r, meta, hint=""):
+    async def rename_files(self, rid, files, r, meta, hint="", drive=None):
         """按命名模板改名（带 TMDB 编号等）；任何一步失败都只记日志，保留原文件名，不影响入库。"""
         try:
-            fn = self.drive.rename
+            fn = (drive or self.drive).rename
         except Exception:  # noqa
             return
         used, done = set(), 0
@@ -331,25 +383,28 @@ class Pipeline:
         返回已入库的季集合（电影是 {None}）；这个资源没用上返回空集合。"""
         r0 = rows[0]
         rid0, stage = r0["id"], None
+        provider = c.provider if c.kind == "share" else "115"
+        drive = self._drive(provider)
+        pname = "夸克" if provider == "quark" else "115"
         try:
-            stage = await self.drive.mkdir(cfg.P115_STAGING_CID, f"req{rid0}-{int(time.time())}")
+            stage = await drive.mkdir(self._staging(provider), f"req{rid0}-{int(time.time())}")
         except Exception as e:  # noqa
-            raise SetupError(f"无法在 115 暂存目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择暂存目录")
+            raise SetupError(f"无法在 {pname} 下载目录里建文件夹（{e}）。请到「设置」里重新选择{pname}的下载目录")
         try:
             if c.kind == "share":
-                code, pw = parse_115_share(c.url, c.password)
-                await self.drive.receive_share(code, pw, stage)
+                code, pw = (quark_mod.parse_quark_share(c.url, c.password) if provider == "quark" else parse_115_share(c.url, c.password))
+                await drive.receive_share(code, pw, stage)
             else:
-                h = await self.drive.add_offline(c.url, stage)
+                h = await drive.add_offline(c.url, stage)
                 deadline = time.time() + cfg.OFFLINE_TIMEOUT
                 while True:
-                    st = await self.drive.offline_state(h)
+                    st = await drive.offline_state(h)
                     if st == "done":
                         break
                     if st == "failed" or time.time() > deadline:
                         raise RuntimeError("离线下载失败或超时")
                     await asyncio.sleep(self.poll)
-            keep, drop = select_files(await self.drive.list_files(stage), rules())
+            keep, drop = select_files(await drive.list_files(stage), rules())
             if not keep:
                 raise RuntimeError("没有符合条件的视频文件（非视频/太小/太大/分辨率不足）")
             plan = []  # [(请求, 它的文件)]
@@ -382,15 +437,15 @@ class Pipeline:
                 xid = x["id"]
                 db.log(xid, f"保留 {len(fl)} 个视频，丢弃 {len(keep) - len(fl) + len(drop)} 个文件")
                 try:
-                    dest = await self.dest_dir(x, meta)
+                    dest = await self.dest_dir(x, meta, provider)
                 except Exception as e:  # noqa
-                    raise SetupError(f"无法在 115 正式目录里建文件夹（{e}）。请到「设置 → 115 网盘」重新选择电影/剧集目录")
+                    raise SetupError(f"无法在 {pname} 影视目录里建文件夹（{e}）。请到「设置」里重新选择{pname}的影视根目录")
                 if replace_old and len(rows) == 1:
-                    await self.remove_placed(xid, replace_old, dest)
-                await self.rename_files(xid, fl, x, meta, c.title)
-                await self.drive.move([f["id"] for f in fl], dest)
-                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl],
-                                                  "chain": [str(c) for c in x.pop("_chain", [dest])]}))
+                    await self.remove_placed(xid, replace_old, dest, provider)
+                await self.rename_files(xid, fl, x, meta, c.title, drive)
+                await drive.move([f["id"] for f in fl], dest)
+                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl], "provider": provider,
+                                                  "chain": [str(ch) for ch in x.pop("_chain", [dest])]}))
                 placed.add(x["season"])
             return placed
         except SetupError:
@@ -403,7 +458,7 @@ class Pipeline:
         finally:
             if stage:
                 try:
-                    await self.drive.delete([stage])
+                    await drive.delete([stage])
                 except Exception:  # noqa
                     pass
 

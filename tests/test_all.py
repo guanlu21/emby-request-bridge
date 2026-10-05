@@ -459,7 +459,7 @@ class SetupErrorTest(unittest.TestCase):
         rid = db.create("movie", 960, None, "Dune (2024)")
         r = self._run(d, rid)
         self.assertEqual(r["status"], "failed")
-        self.assertIn("重新选择暂存目录", r["error"])
+        self.assertIn("重新选择115的下载目录", r["error"])
         self.assertEqual(d.calls, 1)                 # 不再把 8 个候选挨个试一遍
         self.assertEqual(r["tried"], "[]")           # 候选没有被记为已试，修好目录后可以直接重试
 
@@ -637,7 +637,9 @@ class ClassifyTest(unittest.TestCase):
             {"title": "流浪地球2", "content": "", "cloudLinks": [{"link": "https://115cdn.com/s/swxyz?password=q1w2", "cloudType": "pan115"}]},
             {"title": "没有 115 链接", "cloudLinks": ["https://www.aliyundrive.com/s/abc"]}]}]}
         r = cloudsaver.parse_results(data)
-        self.assertEqual([x["url"].split("?")[0] for x in r], ["https://115.com/s/sw123abc", "https://115cdn.com/s/swxyz"])
+        self.assertEqual([x["url"].split("?")[0] for x in r],
+                         ["https://115.com/s/sw123abc", "https://pan.quark.cn/s/xxxx", "https://115cdn.com/s/swxyz"])
+        self.assertEqual([x["provider"] for x in r], ["115", "quark", "115"])        # 夸克链接也保留，标上所属网盘
         self.assertEqual(r[0]["password"], "zz99")
         self.assertEqual(cloudsaver.find_token({"code": 0, "data": {"token": "T1"}}), "T1")
 
@@ -1016,6 +1018,289 @@ class PersonAndPurgeTest(unittest.TestCase):
         cfg.LITEPAN_SOURCE = "RequestBridge"
 
 
+class QuarkTest(unittest.TestCase):
+    def test_parse_share(self):
+        from app.quark import parse_quark_share
+        self.assertEqual(parse_quark_share("https://pan.quark.cn/s/d2a3e0f13e0e"), ("d2a3e0f13e0e", ""))
+        self.assertEqual(parse_quark_share("https://pan.quark.cn/s/abc123?pwd=k9x2#/list/share"), ("abc123", "k9x2"))
+        self.assertEqual(parse_quark_share("https://pan.quark.cn/s/abc123", "zz11"), ("abc123", "zz11"))
+        self.assertIsNone(parse_quark_share("https://115.com/s/abc"))
+
+    def test_drive_receive_share_payloads(self):
+        from app import quark
+        from app.config import cfg
+        calls = []
+
+        class Resp:
+            status_code = 200
+            def __init__(self, body): self._b = body
+            def json(self): return self._b
+
+        class Client:
+            def __init__(self, *a, **k): pass
+            async def aclose(self): pass
+            async def request(self, method, url, params=None, json=None, headers=None):
+                path = url.split("/clouddrive")[1]
+                calls.append((method, path, params, json, headers))
+                if path == "/share/sharepage/token": return Resp({"code": 0, "data": {"stoken": "ST"}})
+                if path == "/share/sharepage/detail":
+                    return Resp({"code": 0, "data": {"list": [{"fid": "f1", "share_fid_token": "t1"}, {"fid": "f2", "share_fid_token": "t2"}]}})
+                if path == "/share/sharepage/save": return Resp({"code": 0, "data": {"task_id": "T1"}})
+                if path == "/task": return Resp({"code": 0, "data": {"status": 2}})
+                if path == "/file/sort":
+                    root = [{"fid": "d1", "file_name": "电影", "dir": True}, {"fid": "v1", "file_name": "a.mkv", "dir": False, "size": 3 * GB}]
+                    return Resp({"code": 0, "data": {"list": root if params["pdir_fid"] == "0" else []}})
+                if path == "/file": return Resp({"code": 0, "data": {"fid": "NEW"}})
+                return Resp({"code": 0, "data": {}})
+        quark.httpx = type("H", (), {"AsyncClient": Client})
+        cfg.QUARK_COOKIE = "kps=abc; sign=def"
+        try:
+            d = quark.QuarkDrive()
+            asyncio.run(d.receive_share("pwd1", "k9x2", "STAGE"))
+            tok = next(c for c in calls if c[1] == "/share/sharepage/token")
+            self.assertEqual(tok[3], {"pwd_id": "pwd1", "passcode": "k9x2"})
+            save = next(c for c in calls if c[1] == "/share/sharepage/save")
+            self.assertEqual(save[3], {"fid_list": ["f1", "f2"], "fid_token_list": ["t1", "t2"], "to_pdir_fid": "STAGE",
+                                       "pwd_id": "pwd1", "stoken": "ST", "pdir_fid": "0", "scene": "link"})
+            self.assertEqual(save[4]["Cookie"], "kps=abc; sign=def")
+            self.assertEqual(asyncio.run(d.list_dirs("0")), [{"id": "d1", "name": "电影"}])         # 只列文件夹
+            fl = asyncio.run(d.list_files("0"))
+            self.assertEqual([f["name"] for f in fl], ["a.mkv"])                                      # 子文件夹是空的，只有根目录那个文件
+            self.assertEqual(asyncio.run(d.ensure_dir("0", "电影")), "d1")                          # 已有就不再建
+            self.assertEqual(asyncio.run(d.ensure_dir("0", "新目录")), "NEW")
+        finally:
+            del cfg.QUARK_COOKIE
+
+    def test_pipeline_routes_quark_share_and_purges_from_quark(self):
+        import json
+        from app import quark
+        from app.config import cfg
+        log115, logq = [], []
+
+        class D115(FakeDrive):
+            async def mkdir(self, parent, name): log115.append("mkdir"); return await super().mkdir(parent, name)
+
+        class QD:
+            def __init__(self):
+                self.n, self.tree = 0, {}
+            async def list_dirs(self, fid): return []
+            async def mkdir(self, parent, name): self.n += 1; logq.append(("mkdir", parent)); return f"q{self.n}"
+            async def ensure_dir(self, parent, name):
+                if (parent, name) not in self.tree:
+                    self.tree[(parent, name)] = f"qd{len(self.tree)}"
+                return self.tree[(parent, name)]
+            async def receive_share(self, code, pw, dest): logq.append(("share", code, pw, dest))
+            async def list_files(self, fid):
+                return [{"id": "qf1", "name": "唐人街探案.2015.1080p.mkv", "size": 3 * GB, "path": "唐人街探案.2015.1080p.mkv"}]
+            async def rename(self, fid, new): logq.append(("rename", new))
+            async def move(self, ids, dest): logq.append(("move", list(ids), dest))
+            async def delete(self, ids): logq.append(("delete", list(ids)))
+        qd = QD()
+        meta = {"names": ["唐人街探案"], "year": "2015", "episodes": 0, "genres": [35], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("share", "唐人街探案 2015 1080p 国语", "https://pan.quark.cn/s/abc123?pwd=k9x2", provider="quark", src="pansou")]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        done = []
+        async def after(r): done.append(r["id"])
+        cfg.QUARK_COOKIE, cfg.QUARK_STAGING_FID, cfg.QUARK_LIBRARY_FID = "c", "qstage", "qroot"
+        try:
+            pl = Pipeline(D115(), meta_fn, search_fn, after, poll=0, quark=qd)
+            rid = db.create("movie", 996, None, "唐人街探案 (2015)")
+            asyncio.run(pl.run(rid))
+            r = db.get(rid)
+            self.assertEqual(r["status"], "done", r["log"])
+            self.assertEqual(log115, [])                                                  # 115 一点没碰
+            self.assertIn(("share", "abc123", "k9x2", "q1"), logq)                        # 转存到夸克下载目录下的临时文件夹
+            self.assertIn(("mkdir", "qstage"), logq)
+            self.assertEqual(r["category"], "夸克-电影-国产")                                # 联动来源会带上「夸克-」
+            placed = json.loads(r["placed"])
+            self.assertEqual((placed["provider"], placed["files"]), ("quark", ["qf1"]))
+            self.assertIn("夸克 入库位置：电影 / 国产", r["log"])
+            logq.clear()
+            n = asyncio.run(pl.purge(r))                                                   # 删除时用夸克的驱动
+            self.assertEqual(n, 1)
+            self.assertEqual(logq[0], ("delete", ["qf1"]))
+        finally:
+            for k in ("QUARK_COOKIE", "QUARK_STAGING_FID", "QUARK_LIBRARY_FID"):
+                delattr(cfg, k)
+
+    def test_quark_resources_skipped_when_quark_not_configured(self):
+        meta = {"names": ["唐人街探案"], "year": "2015", "episodes": 0}
+        raw = [Candidate("share", "唐人街探案 2015 1080p", "https://pan.quark.cn/s/abc123", provider="quark"),
+               Candidate("magnet", "唐人街探案 2015 1080p", "magnet:?xt=urn:btih:" + "4" * 40, size=2 * GB)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        drive = FakeDrive()
+        rid = db.create("movie", 997, None, "唐人街探案 (2015)")
+        asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual(r["status"], "done")
+        self.assertIn("跳过 1 个需要未配置网盘的资源", r["log"])                          # 夸克没配：夸克分享链接不用，磁力照常走 115
+
+    def test_litepan_sources_include_quark(self):
+        from app import litepan
+        from app.config import cfg
+        cfg.LITEPAN_SOURCE = "Emby求片-{category}"
+        cfg.QUARK_COOKIE, cfg.QUARK_LIBRARY_FID = "c", "qroot"
+        try:
+            t = {x["source"]: x["path"] for x in litepan.source_table()}
+            self.assertEqual(t["Emby求片-电影-国产"], "影视/电影/国产")
+            self.assertTrue(t["Emby求片-夸克-电影-国产"].startswith("夸克网盘："))
+            self.assertEqual(len(litepan.all_sources()), 22)
+        finally:
+            delattr(cfg, "QUARK_COOKIE"); delattr(cfg, "QUARK_LIBRARY_FID"); cfg.LITEPAN_SOURCE = "RequestBridge"
+
+
+class DygTest(unittest.TestCase):
+    HTML = """<html><head><title>一瓯春[全集]_电影港-新版-高清电影下载</title></head><body>
+<p>◎片　名: 一瓯春</p><p>◎年　代: 2026</p><p>【下载地址】</p>
+<table><tr><td>磁力：<a href="magnet:?xt=urn:btih:4c2f66e94cddb38bc5f1ee1e1e31029112c30dd3&amp;dn=%E4%B8%80&amp;xl=5267343350">01-08.1080p.HD国语中字无水印.mp4</a></td></tr>
+<tr><td>磁力：<a href="magnet:?xt=urn:btih:517f8dad4b512cc5752b6bcce15e7d8594cd43a9&amp;xl=19772337067&amp;tr=https%3A%2F%2Ftr.nyacat.pw%2Fannounce">全集打包.1080p.HD国语中字无水印.mp4</a></td></tr></table>
+<ul><li>01-30全集<br>迅雷云盘链接：<a href="https://pan.xunlei.com/s/VP1p?pwd=vsyq">x</a><br>夸克云盘链接：<a href="https://pan.quark.cn/s/d2a3e0f13e0e">https://pan.quark.cn/s/d2a3e0f13e0e</a><br>百度云盘链接: https://pan.baidu.com/s/1zk1v?pwd=dyg7</li></ul>
+<a href="/dsj/dlj/25180.html">一瓯春[全集]</a> <a href="/dsj/dlj/">国剧</a> <a href="/dy/jqp/25023.html" title="x">给阿嬷的情书</a></body></html>"""
+
+    def test_parse_page_and_links(self):
+        from app import dyg
+        title, year, items = dyg.parse_page(self.HTML)
+        self.assertEqual((title, year), ("一瓯春[全集]", "2026"))
+        mags = [i for i in items if i["kind"] == "magnet"]
+        self.assertEqual(len(mags), 2)
+        self.assertAlmostEqual(mags[1]["size"], 19772337067)                              # xl 参数就是总大小
+        q = [i for i in items if i["provider"] == "quark"]
+        self.assertEqual((len(q), q[0]["url"], q[0]["label"]), (1, "https://pan.quark.cn/s/d2a3e0f13e0e", "01-30全集"))
+        self.assertFalse([i for i in items if "xunlei" in i["url"] or "baidu" in i["url"]])   # 迅雷/百度不要
+        self.assertEqual([t for t, _ in dyg.result_links(self.HTML, "https://www.dyg7.com")], ["一瓯春[全集]", "给阿嬷的情书"])
+
+    def test_candidates_carry_year_label_and_pass_the_filters(self):
+        from app import dyg
+        title, year, items = dyg.parse_page(self.HTML)
+        cands = dyg._candidates(title, year, items, "u")
+        self.assertIn("一瓯春[全集] (2026) 全集打包.1080p.HD国语中字无水印.mp4", [c.title for c in cands])
+        meta = {"names": ["一瓯春"], "year": "2026", "episodes": 30, "season_eps": {1: 30}}
+        out = build_candidates(cands, meta, "tv", [1], R)
+        self.assertGreaterEqual(len(out), 1)
+        self.assertIn("全集打包", out[0].title)                                               # 整包排最前，只有 01-08 这几集的排后面
+        partial = next(c for c in out if c.title.endswith("01-08.1080p.HD国语中字无水印.mp4"))
+        self.assertIn("仅第01-08集", partial.tags)
+        self.assertTrue(any("夸克分享" in t for c in out for t in c.tags))
+
+
+class TimesAndChineseTest(unittest.TestCase):
+    def test_request_approval_and_done_times(self):
+        import time as _t
+        auto = db.create("movie", 1101, None, "A (2020)", "管理员", "queued")
+        self.assertGreater(db.get(auto)["approved_at"], 0)                      # 不需要审批的，创建时就算批准了
+        self.assertEqual(db.get(auto)["approved_by"], "自动批准")
+        pend = db.create("movie", 1102, None, "B (2020)", "小明", "pending")
+        r = db.get(pend)
+        self.assertEqual((r["approved_at"], r["approved_by"]), (0, ""))         # 待审批：还没有审批时间
+        self.assertGreater(r["created"], 0)
+        before = _t.time()
+        db.batch([pend], "approve", by="guanlu")
+        r = db.get(pend)
+        self.assertGreaterEqual(r["approved_at"], before); self.assertEqual(r["approved_by"], "guanlu")
+        rej = db.create("movie", 1103, None, "C (2020)", "小红", "pending")
+        db.batch([rej], "reject", by="guanlu")
+        self.assertEqual(db.get(rej)["approved_at"], 0)                         # 拒绝不算批准
+        db.batch([rej], "retry", by="guanlu")                                   # 把已拒绝的重新放行 = 批准
+        self.assertGreater(db.get(rej)["approved_at"], 0)
+        failed = db.create("movie", 1104, None, "D (2020)", "小刚", "pending")
+        db.batch([failed], "approve", by="a"); at = db.get(failed)["approved_at"]
+        db.update(failed, status="failed"); db.batch([failed], "retry", by="b")
+        self.assertEqual(db.get(failed)["approved_at"], at)                     # 失败重试不会改审批时间
+
+    def test_done_time_is_recorded_by_the_pipeline(self):
+        meta = {"names": ["Dune"], "year": "2021", "episodes": 0}
+        raw = [Candidate("magnet", "Dune 2021 1080p", "magnet:?xt=urn:btih:" + "3" * 40, size=2 * GB)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        rid = db.create("movie", 1105, None, "Dune (2021)", "u", "queued")
+        asyncio.run(Pipeline(FakeDrive(), meta_fn, search_fn, after, poll=0).run(rid))
+        r = db.get(rid)
+        self.assertEqual(r["status"], "done")
+        self.assertGreaterEqual(r["done_at"], r["approved_at"])
+        self.assertGreaterEqual(r["approved_at"], r["created"])
+
+    def test_chinese_names_come_first(self):
+        from app.config import cfg
+        from app.filters import chinese_rank, priority_tuple
+        names = ["唐人街探案", "Detective Chinatown"]
+        self.assertEqual([chinese_rank(t, names) for t in ("唐人街探案 2015 1080p", "Detective.Chinatown.2015.1080p.国语中字", "Detective.Chinatown.2015.1080p")], [2, 1, 0])
+        meta = {"names": names, "year": "2015", "episodes": 0}
+        raw = [Candidate("magnet", "Detective.Chinatown.2015.1080p.BluRay", "magnet:?xt=urn:btih:" + "a" * 40, size=2 * GB, seeders=50),
+               Candidate("magnet", "唐人街探案.2015.720p.HDTV", "magnet:?xt=urn:btih:" + "b" * 40, size=2 * GB, seeders=1),
+               Candidate("magnet", "Detective.Chinatown.2015.1080p.国语中字", "magnet:?xt=urn:btih:" + "c" * 40, size=2 * GB, seeders=5)]
+        try:
+            out = build_candidates(raw, meta, "movie", None, R)
+            self.assertEqual([c.url[-1] for c in out], ["b", "c", "a"])         # 有中文片名的最前（即使画质低、做种少），含中文的其次，全外文的最后
+            self.assertIn("中文片名", out[0].tags); self.assertIn("含中文", out[1].tags)
+            cfg.PRIORITY = "quality,year"                                        # 以前保存的顺序里没有 chinese：自动排第一
+            self.assertEqual(priority_tuple(cfg.PRIORITY, {"chinese": 2, "quality": 3, "year": 2})[:3], (2, 3, 2))
+            out = build_candidates(raw, meta, "movie", None, R)
+            self.assertEqual(out[0].url[-1], "b")
+            cfg.PRIORITY = "year,quality,chinese"                                # 明确写了位置就听你的：画质优先于中文
+            out = build_candidates(raw, meta, "movie", None, R)
+            self.assertNotEqual(out[0].url[-1], "b")
+        finally:
+            cfg.PRIORITY = "chinese,year,quality,drive,keywords,size,source,seeders"
+
+
+class SearchThrottleTest(unittest.TestCase):
+    def test_per_source_concurrency_is_capped(self):
+        from app.sources import gather_limited
+        running, peak = {"A": 0, "B": 0}, {"A": 0, "B": 0}
+
+        def job(lb):
+            async def f():
+                running[lb] += 1; peak[lb] = max(peak[lb], running[lb])
+                await asyncio.sleep(0.02)
+                running[lb] -= 1
+                return [lb]
+            return (lb, f)
+        out, stats = asyncio.run(gather_limited([job("A") for _ in range(8)] + [job("B") for _ in range(4)], 5,
+                                                {"A": (2, 5), "B": (1, 5)}))
+        self.assertEqual((peak["A"], peak["B"]), (2, 1))                       # 一个源同时只放几个请求
+        self.assertEqual((len(out), stats["A"]["ok"], stats["B"]["ok"]), (12, 8, 4))
+
+    def test_timeouts_and_errors_do_not_lose_other_results(self):
+        from app.sources import gather_limited, _stat_note
+        calls = {"flaky": 0}
+
+        async def slow(): await asyncio.sleep(1); return ["x"]
+        async def good(): return ["g1", "g2"]
+        async def boom(): raise ValueError("bad")
+        async def flaky():
+            calls["flaky"] += 1
+            if calls["flaky"] == 1:
+                raise ConnectionError("reset")
+            return ["f"]
+        out, st = asyncio.run(gather_limited([("S", slow), ("G", good), ("E", boom), ("F", flaky)], 5,
+                                             {"S": (1, 0.05), "G": (1, 1), "E": (1, 1), "F": (1, 1)}))
+        self.assertEqual(sorted(out), ["f", "g1", "g2"])                       # 慢的超时了，别的结果照样拿到；偶发错误重试一次就成功
+        self.assertEqual((st["S"]["timeout"], st["E"]["error"], st["F"]["ok"], calls["flaky"]), (1, 1, 1, 2))
+        self.assertIn("1 个超时", _stat_note("S", st["S"])); self.assertIn("ValueError", _stat_note("E", st["E"]))
+
+    def test_overall_deadline_keeps_finished_results(self):
+        from app.sources import gather_limited
+        async def quick(): return ["q"]
+        async def hang(): await asyncio.sleep(10); return ["h"]
+        out, st = asyncio.run(gather_limited([("Q", quick), ("H", hang), ("H", hang)], 0.1, {"Q": (1, 5), "H": (2, 20)}))
+        self.assertEqual(out, ["q"])                                           # 到期限就用已经拿到的，不会一无所获
+        self.assertEqual(st["H"]["abandoned"], 2)
+
+    def test_rejects_sorted_by_closeness(self):
+        meta = {"names": ["鬼片王之再现凶榜"], "year": "1999", "episodes": 0}
+        raw = [Candidate("magnet", "Utawarerumono S00E11 BD Remux 1080p", "magnet:?xt=urn:btih:" + "1" * 40, size=2 * GB),
+               Candidate("magnet", "【影视】鬼片王之再现凶榜.1999.720P.WEB-DL", "magnet:?xt=urn:btih:" + "2" * 40, size=0.4 * GB),   # 太小：被过滤，但是想要的片
+               Candidate("magnet", "SPY x FAMILY S03E04 1080p", "magnet:?xt=urn:btih:" + "3" * 40, size=2 * GB)]
+        rep = {}
+        build_candidates(raw, meta, "movie", None, R, rep)
+        self.assertEqual(rep["rejects"][0]["reason"], "体积不在范围")             # 差一点就匹配的排最前，完全不沾边的（标题不匹配）排后面
+        self.assertIn("鬼片王之再现凶榜", rep["rejects"][0]["title"])
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")
@@ -1088,7 +1373,7 @@ class OpenDriveTest(unittest.TestCase):
         asyncio.run(Pipeline(drive, meta_fn, search_fn, after, poll=0).run(rid))
         r = db.get(rid)
         self.assertEqual(r["status"], "done")
-        self.assertIn("跳过 1 个分享链接", r["log"])
+        self.assertIn("跳过 1 个 115 分享链接", r["log"])
 
 
 class PipelineTest(unittest.TestCase):
@@ -1111,7 +1396,7 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(done, [rid])
         self.assertEqual(len(drive.moved), 1)
         self.assertEqual(drive.moved[0][0], [1])  # 只移动合格的那个视频
-        self.assertEqual(len(drive.deleted), 2)   # 先试做种最多的磁力（失败），再试第二个（成功），两次的暂存目录都被清理
+        self.assertEqual(len(drive.deleted), 3)   # 带中文的分享先试（没配 Cookie，失败）→ 做种最多的磁力（失败）→ 第二个磁力（成功），三次的暂存目录都被清理
         self.assertIn("换下一个", r["log"])
 
     def test_all_fail(self):

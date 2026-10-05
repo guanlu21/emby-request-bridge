@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth as auth_mod, cloudsaver, db, drive115, emby, kite, litepan, settings, tmdb
+from . import auth as auth_mod, cloudsaver, db, drive115, dyg, emby, haisou, kite, litepan, quark, settings, tmdb
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
@@ -40,7 +40,7 @@ def spawn(rid):
 @asynccontextmanager
 async def lifespan(app):
     global pipe
-    pipe = Pipeline(drive115.CompositeDrive(), _meta, search_all, notify_after)
+    pipe = Pipeline(drive115.CompositeDrive(), _meta, search_all, notify_after, quark=quark.QuarkDrive())
     for rid in db.leaders(db.unfinished()):  # 重启后继续未完成的请求（电视剧一次求多季的算一组）
         spawn(rid)
     yield
@@ -214,7 +214,7 @@ def list_requests(request: Request, user: str = "", x_token: str = Header("")):
 # ---------- 管理 ----------
 @app.post("/api/requests/batch")
 async def batch(request: Request, x_token: str = Header("")):
-    admin(request, x_token)
+    u = admin(request, x_token)
     body = await request.json()
     action = body.get("action")
     if action not in ("approve", "reject", "retry", "reset", "delete"):
@@ -230,7 +230,7 @@ async def batch(request: Request, x_token: str = Header("")):
                 purged += await pipe.purge(r)
             except Exception as e:  # noqa
                 raise HTTPException(502, f"删除网盘文件失败（记录没有删除）：{e}")
-    done = db.batch(body.get("ids", []), action)
+    done = db.batch(body.get("ids", []), action, by=u["name"])
     if action in ("approve", "retry", "reset"):
         for rid in db.leaders(done):
             spawn(rid)
@@ -438,6 +438,33 @@ async def p115_test(request: Request, x_token: str = Header("")):
         return {"ok": True, "mode": mode, "root_dirs": len(dirs)}
     except Exception as e:  # noqa
         return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/api/quark/folders")
+async def quark_folders(request: Request, fid: str = "0", x_token: str = Header("")):
+    admin(request, x_token)
+    try:
+        return [{"id": str(d["id"]), "name": d["name"]} for d in await pipe.quark.list_dirs(fid)]
+    except Exception as e:  # noqa
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/quark/test")
+async def quark_test(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await quark.test()
+
+
+@app.post("/api/settings/haisou/test")
+async def test_haisou(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await haisou.test()
+
+
+@app.post("/api/settings/dyg/test")
+async def test_dyg(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await dyg.test()
 
 
 @app.post("/api/p115/auth/start")
