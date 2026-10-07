@@ -440,7 +440,7 @@ const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id=
     <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
     <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
   '夸克网盘':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testQuark()">测试夸克连接</button></div>`,
-  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testDyg()">测试电影港</button><button class="btn" onclick="testHaisou()">测试海搜</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
+  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testDyg()">测试电影港</button><button class="btn" onclick="testRules()">测试磁力站</button><button class="btn" onclick="testHaisou()">测试海搜</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
   '代理与 TMDB':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testSet()">测试 TMDB 连通性</button></div>`,
   'LitePan 联动':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testLp()">测试连接</button><button class="btn" onclick="triggerLp()">手动触发联动</button><button class="btn" onclick="showSources()">联动来源清单</button></div>`};
 
@@ -512,6 +512,12 @@ const testDyg=()=>runTest('/api/settings/dyg/test',r=>{
   if(r.page)lines.push('',`影片页解析（${r.page}）：标题「${r.page_title||''}」${r.page_year?'，年代 '+r.page_year:''}，磁力 ${r.magnets} 个、夸克 ${r.quark} 个、115 ${r.s115} 个${r.sample?'；例：'+r.sample:''}`);
   if(r.page_error)lines.push('影片页读取失败：'+r.page_error);
   return lines.join('\n')});
+const testRules=()=>runTest('/api/settings/rules/test',r=>{
+  const L=['磁力站测试（试搜「流浪地球」）：'];
+  (r.results||[]).forEach(x=>L.push(x.error?`· ${x.engine}：失败 ${x.error}`:`· ${x.engine}：HTTP ${x.status}，解析出 ${x.items} 条，其中 ${x.magnets} 条带磁力${x.first?'，例：'+x.first:''}`));
+  if(!(r.results||[]).length)L.push('· 没有可用的引擎：检查「磁力站」里填的名字');
+  L.push('','可用的引擎名：'+(r.available||[]).join('、'));
+  return L.join('\n')});
 const testHaisou=()=>runTest('/api/settings/haisou/test',r=>{
   if(!r.ok)return '失败：'+r.error;
   const L=[`海搜测试：POST ${r.url} → HTTP ${r.status}`,`解析出 ${r.parsed} 个分享条目${(r.sample||[]).length?'，例：'+r.sample.join('；'):''}`,'','搜索返回的前 600 字：',r.raw||''];

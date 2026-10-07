@@ -1301,6 +1301,232 @@ class SearchThrottleTest(unittest.TestCase):
         self.assertIn("鬼片王之再现凶榜", rep["rejects"][0]["title"])
 
 
+class DownloadedButRejectedTest(unittest.TestCase):
+    """下载成功但没通过检查的内容：日志要说清原因；连载中的剧按已播出集数算；可选保留不删。"""
+
+    def _run(self, files, eps=10, ratio=50, keep=False, season=1, title="余红旧事 全集 1080p"):
+        from app.config import cfg
+        cfg.SEASON_RATIO, cfg.KEEP_FAILED, cfg.LIBRARY_ROOT_CID = ratio, keep, 5000
+        events = []
+
+        class D(FakeDrive):
+            async def offline_state(self, h): return "done"
+            async def list_files(self, cid): return files
+            async def rename(self, fid, new): events.append(("rename", new))
+            async def delete(self, ids): events.append(("delete", list(ids)))
+            async def move(self, ids, dest): events.append(("move", list(ids)))
+        meta = {"names": ["余红旧事"], "year": "2025", "episodes": eps, "season_eps": {season: eps}, "genres": [18], "lang": "zh", "countries": ["CN"]}
+        raw = [Candidate("magnet", title, "magnet:?xt=urn:btih:" + "5" * 40, size=3 * GB)]
+        async def meta_fn(r): return meta
+        async def search_fn(m, t, s): return raw
+        async def after(r): pass
+        rid = db.create("tv", 1200 + len(events) + int(ratio), season, "余红旧事 (2025)")
+        asyncio.run(Pipeline(D(), meta_fn, search_fn, after, poll=0).run(rid))
+        return db.get(rid), events
+
+    def _eps(self, n, size=2 * GB, season=1):
+        return [{"id": 10 + i, "name": f"余红旧事.S{season:02d}E{i + 1:02d}.1080p.mkv", "size": size, "path": f"余红旧事.S{season:02d}E{i + 1:02d}.1080p.mkv"} for i in range(n)]
+
+    def test_log_explains_why_everything_was_dropped(self):
+        from app.config import cfg
+        tiny = [{"id": i, "name": f"第{i}集.mp4", "size": 40 * 1024 ** 2, "path": f"第{i}集.mp4"} for i in range(1, 13)]
+        tiny.append({"id": 99, "name": "说明.txt", "size": 10, "path": "说明.txt"})
+        try:
+            r, ev = self._run(tiny)
+            self.assertEqual(r["status"], "failed")
+            self.assertIn("共 13 个文件：太小 12、非视频 1", r["log"])             # 短剧一集几十 MB：被「最小 100MB」挡掉，日志里直接写明
+            self.assertIn("已从下载目录删除", r["log"])                              # 删除是有说明的
+            self.assertTrue([e for e in ev if e[0] == "delete"])
+        finally:
+            cfg.SEASON_RATIO, cfg.KEEP_FAILED, cfg.LIBRARY_ROOT_CID = 50, False, 0
+
+    def test_partial_pack_ratio_is_configurable(self):
+        from app.config import cfg
+        try:
+            r, _ = self._run(self._eps(4), eps=10, ratio=50)                       # 已播出 10 集，只有 4 集：不到 50%，不算整季
+            self.assertEqual(r["status"], "failed"); self.assertIn("至少要 5 个", r["log"])
+            r, ev = self._run(self._eps(4), eps=10, ratio=40)                      # 调到 40%：4 集就够
+            self.assertEqual(r["status"], "done")
+            r, _ = self._run(self._eps(2), eps=10, ratio=0)                        # 0 = 不检查
+            self.assertEqual(r["status"], "done")
+        finally:
+            cfg.SEASON_RATIO, cfg.KEEP_FAILED, cfg.LIBRARY_ROOT_CID = 50, False, 0
+
+    def test_keep_failed_renames_instead_of_deleting(self):
+        from app.config import cfg
+        try:
+            r, ev = self._run(self._eps(2), eps=10, ratio=50, keep=True)
+            self.assertEqual(r["status"], "failed")
+            self.assertTrue([e for e in ev if e[0] == "rename" and e[1].startswith("未入库-")])
+            self.assertFalse([e for e in ev if e[0] == "delete"])                   # 没有删除
+            self.assertIn("没有删除", r["log"])
+        finally:
+            cfg.SEASON_RATIO, cfg.KEEP_FAILED, cfg.LIBRARY_ROOT_CID = 50, False, 0
+
+    def test_airing_season_counts_only_aired_episodes(self):
+        import time as _t
+        from app import settings, sources, tmdb
+        today = _t.strftime("%Y-%m-%d")
+        future = "2999-01-01"
+
+        async def fake_get(path, **kw):
+            if path.endswith("/season/1"):
+                return {"episodes": [{"air_date": "2020-01-01"}] * 6 + [{"air_date": today}] * 2 + [{"air_date": future}] * 12}
+            return {"name": "余红旧事", "first_air_date": "2025-01-01", "genres": [], "origin_country": ["CN"], "original_language": "zh"}
+        orig = tmdb.get
+        tmdb.get = fake_get
+        settings.save({"tmdb_key": "K"})
+        try:
+            meta = asyncio.run(sources.tmdb_meta("tv", 1, [1]))
+            self.assertEqual(meta["season_eps"], {1: 8})                          # 总共计划 20 集，只播出了 8 集：按 8 集检查
+        finally:
+            tmdb.get = orig
+
+    def test_explain_files(self):
+        from app.filters import explain_files, file_reason
+        r = Rules(720, 0.5 * GB, 5 * GB)
+        files = [{"name": "a.mkv", "size": 2 * GB}, {"name": "b.nfo", "size": 5}, {"name": "c.mkv", "size": 3 * 1024 ** 2},
+                 {"name": "d.480p.mkv", "size": 2 * GB}, {"name": "e.mkv", "size": 9 * GB}]
+        self.assertEqual([file_reason(f["name"], f["size"], r) for f in files], ["", "非视频", "太小", "分辨率不足", "太大"])
+        self.assertIn("共 5 个文件", explain_files(files, r))
+
+
+class RulesEngineTest(unittest.TestCase):
+    H1 = "a" * 40
+    CLD = f"""<html><body>
+<article class="resource resource-card"><h2><a href="/detail/{H1}.html">【影视】鬼片王之再现凶榜.1999.720P.WEB-DL.X264.AAC.CHS.mp4</a></h2>
+  <div class="meta resource-meta"><span>影视</span><span>2024-09-19</span><span>447.6 MB</span></div></article>
+<article class="resource resource-card"><h2><a href="/detail/{'b' * 40}.html">【影视】[酷吧电影:kubady2.com]鬼片王之再现凶榜.1999.1080P.国语无字幕.mp4</a></h2>
+  <div class="meta resource-meta"><span>影视</span><span>2025-10-17</span><span>2.1 GB</span></div></article>
+<article class="resource resource-card"><h2><a href="/detail/{'c' * 40}.html">SPY x FAMILY S03E04 1080p</a></h2><div class="meta resource-meta"><span>x</span><span>y</span><span>300 MB</span></div></article>
+</body></html>"""
+    BS = """<html><body>
+<div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+  <h3><a href="/torrent/xyz">Detective.Chinatown.2015.1080p.BluRay.x264</a></h3>
+  <div class="flex flex-wrap items-center gap-4 text-sm text-gray-600 mb-3"><span><span>Movies</span></span><span><span>3.2 GB</span></span><span><span>2024-01-01</span></span></div>
+  <a href="magnet:?xt=urn:btih:%s&dn=Detective">Magnet</a></div></body></html>""" % ("d" * 40)
+
+    def _rule(self, name):
+        from app import rules
+        return rules.load_rules()[name]
+
+    def test_bundled_rules_have_the_requested_engines_and_no_adult_ones(self):
+        import json
+        from app import rules
+        r = rules.load_rules()
+        self.assertIn("磁力帝", r); self.assertIn("BitSearch", r)
+        self.assertNotIn("porn", json.dumps([e.get("engineTags") for e in r.values()], ensure_ascii=False))
+
+    def test_user_rules_file_is_loaded_but_adult_engines_are_dropped(self):
+        import json, os
+        from app import rules
+        from app.config import cfg
+        path = os.path.join(os.path.dirname(cfg.DB_PATH), "rules.json")
+        base = self._rule("磁力帝")
+        extra = dict(base, engineName="我的站", engineTags=["general"])
+        adult = dict(base, engineName="成人站", engineTags=["porn"])
+        json.dump({"regulars": [extra, adult]}, open(path, "w", encoding="utf-8"), ensure_ascii=False)
+        try:
+            r = rules.load_rules()
+            self.assertIn("我的站", r); self.assertNotIn("成人站", r); self.assertIn("磁力帝", r)
+        finally:
+            os.remove(path)
+
+    def test_build_request(self):
+        from app import rules
+        m, url, h, body = rules.build_request(self._rule("磁力帝"), "鬼片王之再现凶榜", 0)
+        self.assertEqual((m, body), ("GET", None))
+        self.assertEqual(url, "https://www.cld123.com/search-%E9%AC%BC%E7%89%87%E7%8E%8B%E4%B9%8B%E5%86%8D%E7%8E%B0%E5%87%B6%E6%A6%9C-0-0-1.html")
+        self.assertEqual(rules.build_request(self._rule("磁力帝"), "x", 2)[1].rsplit("-", 1)[1], "3.html")            # 第 3 页
+        self.assertEqual(rules.build_request(self._rule("BitSearch"), "Dune 2021", 0)[1], "https://bitsearch.eu/search?q=Dune%202021&page=1")
+        m, url, h, body = rules.build_request(self._rule("BTShow"), '带"引号"', 1)
+        self.assertEqual((m, url, body), ("POST", "https://btsow.live/bts/data/api/search", [{"search": '带"引号"'}, 50, 2]))   # JSON 请求体里关键词会转义
+        self.assertFalse([k for k in h if k.lower().startswith("sec-")])
+
+    def test_parse_cili_di_and_bitsearch(self):
+        from app import rules
+        rows = rules.parse_list(self._rule("磁力帝"), self.CLD)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["magnet"], "magnet:?xt=urn:btih:" + self.H1)                  # 哈希从链接里取出来拼成磁力
+        self.assertEqual(rows[1]["size"], "2.1 GB"); self.assertIn("国语无字幕", rows[1]["title"])
+        rows = rules.parse_list(self._rule("BitSearch"), self.BS)
+        self.assertEqual((rows[0]["title"], rows[0]["size"]), ("Detective.Chinatown.2015.1080p.BluRay.x264", "3.2 GB"))
+        self.assertTrue(rows[0]["magnet"].startswith("magnet:?xt=urn:btih:" + "d" * 40))
+
+    def test_parse_json_engines(self):
+        import json
+        from app import rules
+        rows = rules.parse_list(self._rule("BTShow"), json.dumps({"data": [{"name": "唐人街探案 2015 1080p", "size": "2.0 GB", "hash": "e" * 40}]}))
+        self.assertEqual(rows[0]["magnet"], "magnet:?xt=urn:btih:" + "e" * 40); self.assertEqual(rows[0]["title"], "唐人街探案 2015 1080p")
+        rows = rules.parse_list(self._rule("磁力口袋"), json.dumps({"data": {"list": [{"torrentName": "A", "torrentSize": "1 GB", "id": "f" * 40}]}}))
+        self.assertEqual(rows[0]["magnet"], "magnet:?xt=urn:btih:" + "f" * 40)
+
+    def test_search_filters_by_whole_name_and_follows_detail_pages(self):
+        from app import rules
+        from app.config import cfg
+        seen = []
+
+        class Resp:
+            def __init__(self, text): self.status_code, self.text = 200, text
+
+        class Client:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url, headers=None):
+                seen.append(url)
+                if "/detail/spider" in url:
+                    return Resp('<input id="m_link" value="magnet:?xt=urn:btih:%s&dn=x">' % ("9" * 40))
+                if "cld123" in url:
+                    return Resp(RulesEngineTest.CLD)
+                return Resp('<div class="search-item"><div class="item-title"><h3><a href="/detail/spider1">唐人街探案.2015.1080P.国语中字</a></h3></div>'
+                            '<div class="item-bar"><span>x</span><span><b>2024</b></span><span><b>2.5 GB</b></span></div></div>'
+                            '<div class="search-item"><div class="item-title"><h3><a href="/detail/other">别的片 2015</a></h3></div></div>')
+        rules.httpx = type("H", (), {"AsyncClient": Client})
+        cfg.RULES_PROXY = False
+        # 1) 磁力帝：名称完整匹配的才留下（SPY x FAMILY 不要）
+        out = asyncio.run(rules.search("磁力帝", "鬼片王之再现凶榜", 0, ["鬼片王之再现凶榜"]))
+        self.assertEqual(len(out), 2)                                                       # SPY x FAMILY 没有完整包含片名，不要
+        self.assertTrue(out[0].title.startswith("【影视】鬼片王之再现凶榜")); self.assertIn("kubady2.com", out[1].title)
+        self.assertAlmostEqual(out[1].size, 2.1 * 1024 ** 3, delta=1e6); self.assertEqual(out[0].src, "磁力帝")
+        # 2) 磁力蜘蛛：列表里没有磁力，要点进详情页取；不匹配的条目不会去取详情
+        out = asyncio.run(rules.search("磁力蜘蛛", "唐人街探案", 0, ["唐人街探案"]))
+        self.assertEqual(len(out), 1); self.assertTrue(out[0].url.endswith("9" * 40 + "&dn=x"))
+        self.assertEqual([u for u in seen if "/detail/" in u], ["https://btmovi.cyou/detail/spider1"])
+        # 3) 搜到的候选能走完整的筛选：1080P 国语的排前面，447MB 的被体积挡掉
+        meta = {"names": ["鬼片王之再现凶榜"], "year": "1999", "episodes": 0}
+        cl = asyncio.run(rules.search("磁力帝", "鬼片王之再现凶榜", 0, meta["names"]))
+        got = build_candidates(cl, meta, "movie", None, R)
+        self.assertEqual(len(got), 1); self.assertIn("1080P", got[0].title)
+
+
+class HaisouTest(unittest.TestCase):
+    def test_request_body_matches_the_captured_schema_and_pages(self):
+        from app import haisou
+        from app.config import cfg
+        b = haisou.build_body(cfg.HAISOU_BODY, "流浪地球", 2)
+        self.assertEqual(b["query"], "流浪地球")
+        self.assertEqual(b["filters"]["platforms"], ["quark", "115"])                      # 只要我们支持的两个网盘
+        self.assertEqual((b["filters"]["scope"], b["pagination"]), ("title", {"page": 2, "page_size": 20}))
+        self.assertEqual(haisou.build_body('{"keyword": "{kw}", "page": 1, "size": 30}', "x")["query"], "x")   # 旧版猜的默认值自动换成新的
+
+    def test_fetch_links_are_found_without_knowing_field_names(self):
+        from app import haisou
+        data = {"code": 0, "data": {"share": {"url": "https://pan.quark.cn/s/abc123def456", "extract_code": "k9x2"}}}
+        links = haisou.extract_links(data)
+        self.assertEqual([(l["provider"], l["url"], l["password"]) for l in links], [("quark", "https://pan.quark.cn/s/abc123def456", "k9x2")])
+        data = {"links": ["https://115.com/s/sw123?password=1234", "https://pan.baidu.com/s/xyz"]}
+        self.assertEqual([l["provider"] for l in haisou.extract_links(data)], ["115"])        # 百度等不要
+
+    def test_find_items_is_schema_tolerant(self):
+        from app import haisou
+        data = {"data": {"items": [{"id": "OAqJWg4ki2", "title": "流浪地球 2019 4K", "platform": "quark", "size": 1000},
+                                   {"id": "3U1vBTKjLE", "name": "流浪地球", "type": "115"},
+                                   {"id": "zz", "title": "某百度资源", "platform": "baidu"}]}}
+        items = haisou.find_items(data)
+        self.assertEqual([(i["id"], i["platform"]) for i in items], [("OAqJWg4ki2", "quark"), ("3U1vBTKjLE", "115"), ("zz", "other")])
+
+
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")

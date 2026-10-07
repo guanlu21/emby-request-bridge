@@ -2,12 +2,13 @@
 import asyncio
 import contextvars
 import re
+import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, parse_qs
 
 import httpx
 
-from . import cloudsaver, dyg, haisou, kite, quark
+from . import cloudsaver, dyg, haisou, kite, quark, rules
 from .config import cfg
 from collections import Counter
 
@@ -50,7 +51,13 @@ async def tmdb_meta(media_type: str, tmdb_id: int, season):
     season_eps = {}
     if media_type == "tv" and seasons:
         res = await asyncio.gather(*[tmdb.get(f"{path}/season/{s}") for s in seasons], return_exceptions=True)
-        season_eps = {s: len(r.get("episodes", [])) for s, r in zip(seasons, res) if isinstance(r, dict)}
+        today = time.strftime("%Y-%m-%d")
+
+        def aired(r):  # 连载中的剧：TMDB 的总集数是计划集数，资源只会有已播出的，检查「够不够整季」要按已播出的算
+            eps = r.get("episodes", [])
+            dated = [e for e in eps if e.get("air_date")]
+            return len([e for e in dated if e["air_date"] <= today]) if dated else len(eps)
+        season_eps = {s: aired(r) for s, r in zip(seasons, res) if isinstance(r, dict)}
     countries = loc.get("origin_country") or [c.get("iso_3166_1", "") for c in loc.get("production_countries", [])]
     return {"names": names, "year": (loc.get(dkey) or "")[:4], "episodes": next(iter(season_eps.values()), 0),
             "season_eps": season_eps, "genres": [g["id"] for g in loc.get("genres", [])],
@@ -126,7 +133,7 @@ async def _kite_search(ks, q: str, limit: int = 50) -> list[Candidate]:
 
 # 每个搜索源：(同时最多几个请求, 单个请求超时秒数)。并发太多时 PanSou / CloudSaver 会被压垮，结果全部超时，
 # 所以一个源一次只放几个请求，其余排队；整体有个期限，到点就用已经拿到的结果，不会因为个别请求卡住而一无所获。
-LIMITS = {"PanSou": (3, 30), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "电影港": (1, 60), "海搜": (1, 60)}
+LIMITS = {"PanSou": (3, 30), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "磁力站": (3, 45), "电影港": (1, 60), "海搜": (1, 60)}
 DEADLINE = {1: 60, 2: 120, 3: 200}
 
 
@@ -209,6 +216,11 @@ async def search_all(meta: dict, media_type: str, seasons):
                 jobs.append(("电影港", lambda: dyg.search_many(meta["names"], qs[:3], media_type)))
             if cfg.HAISOU_ON:
                 jobs.append(("海搜", lambda: haisou.search_many(meta["names"], qs[:3])))
+            if rules.configured():  # 磁力帝、BitSearch 等：按纸鸢磁力的规则由本服务直接去搜
+                names = meta["names"]
+                rq = list(dict.fromkeys([names[0]] + ([f"{names[0]} {meta['year']}"] if meta["year"] else []) + names[1:2]))[:{1: 1, 2: 3, 3: 4}[level]]
+                jobs += [("磁力站", lambda e=e, q=q, pg=pg: rules.search(e, q, pg, names))
+                         for e in rules.selected() for q in rq for pg in range({1: 1, 2: 2, 3: 3}[level])]
             if kite.configured():
                 ks = kite.KiteSession()
                 jobs += [("纸鸢磁力", lambda q=q: _kite_search(ks, q, kite_limit)) for q in qs[:n_kite]]

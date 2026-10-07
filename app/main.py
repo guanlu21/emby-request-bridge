@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth as auth_mod, cloudsaver, db, drive115, dyg, emby, haisou, kite, litepan, quark, settings, tmdb
+from . import auth as auth_mod, cloudsaver, db, drive115, dyg, emby, haisou, kite, litepan, quark, rules, settings, tmdb
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
@@ -453,6 +453,12 @@ async def quark_folders(request: Request, fid: str = "0", x_token: str = Header(
 async def quark_test(request: Request, x_token: str = Header("")):
     admin(request, x_token)
     return await quark.test()
+
+
+@app.post("/api/settings/rules/test")
+async def test_rules(request: Request, x_token: str = Header("")):
+    admin(request, x_token)
+    return await rules.test()
 
 
 @app.post("/api/settings/haisou/test")

@@ -5,6 +5,10 @@
 因为不知道请求体和返回结构，这里做成「可调」的：搜索请求体用设置里的 JSON 模板（{kw} 代表关键词），
 返回结构按常见字段名宽松解析；取链接那步不依赖字段名，直接在返回里找夸克/115 的分享链接和提取码。
 默认关闭。设置页「测试海搜」会显示实际返回的前几百字，据此改模板即可。
+
+注意：网页版给每个请求都带了一个 x-hs-client-context 请求头（每次不同的一长串，看起来是页面脚本生成的签名）。
+本服务不会去模拟这个头，也不会使用你浏览器里的会话 Cookie——发的是普通请求。站点如果因此拒绝（401/403 等），
+海搜就用不了，夸克资源请走 PanSou、CloudSaver、电影港。
 """
 from __future__ import annotations
 
@@ -24,7 +28,8 @@ TITLE_KEYS = ("title", "name", "share_name", "shareName", "file_name", "fileName
 PLAT_KEYS = ("platform", "type", "pan", "source", "drive", "cloud", "disk", "storage", "provider")
 SIZE_KEYS = ("size", "total_size", "totalSize", "file_size")
 PWD_KEYS = ("pwd", "password", "passcode", "pass_code", "extract_code", "extractCode", "code")
-DEFAULT_BODY = '{"keyword": "{kw}", "page": 1, "size": 30}'
+DEFAULT_BODY = '{"query": "{kw}", "filters": {"scope": "title", "platforms": ["quark", "115"], "include_filtered": false, "exclude_same_file_hsids": []}, "pagination": {"page": 1, "page_size": 20}}'
+OLD_DEFAULTS = {'{"keyword": "{kw}", "page": 1, "size": 30}'}  # 之前版本猜的请求体，已经按真实抓包换掉；设置里还留着旧默认值的自动用新的
 
 
 def _base() -> str:
@@ -42,9 +47,14 @@ def _fill(o, kw: str):
     return o
 
 
-def build_body(template: str, kw: str):
+def build_body(template: str, kw: str, page: int = 1):
+    if not template or template in OLD_DEFAULTS:
+        template = DEFAULT_BODY
     try:
-        return _fill(json.loads(template or DEFAULT_BODY), kw)
+        body = _fill(json.loads(template), kw)
+        if isinstance(body.get("pagination"), dict):
+            body["pagination"]["page"] = page  # 翻页
+        return body
     except ValueError:
         raise RuntimeError("「海搜搜索请求体」不是合法的 JSON（关键词位置写 {kw}）")
 
@@ -116,8 +126,8 @@ def _headers() -> dict:
             "Referer": _base() + "/", "Origin": _base()}
 
 
-async def _search(c: httpx.AsyncClient, kw: str):
-    r = await c.post(_base() + "/api/v2/shares/search", json=build_body(cfg.HAISOU_BODY, kw), headers=_headers())
+async def _search(c: httpx.AsyncClient, kw: str, page: int = 1):
+    r = await c.post(_base() + "/api/v2/shares/search", json=build_body(cfg.HAISOU_BODY, kw, page), headers=_headers())
     try:
         return r.status_code, r.json(), r.text
     except Exception:  # noqa
@@ -133,6 +143,11 @@ async def _fetch(c: httpx.AsyncClient, sid: str):
         return r.status_code, None, r.text
 
 
+def sources_depth() -> int:
+    from .sources import depth
+    return depth()
+
+
 async def search_many(names: list[str], queries: list[str]):
     """搜若干个关键词 → 过滤出名称完整匹配的夸克/115 分享 → 逐个取链接 → Candidate 列表。"""
     from .filters import name_hit
@@ -140,12 +155,16 @@ async def search_many(names: list[str], queries: list[str]):
     shares = {}
     async with httpx.AsyncClient(timeout=25, follow_redirects=True) as c:
         for q in dict.fromkeys(queries):
-            status, data, _ = await _search(c, q)
-            if status != 200 or data is None:
-                raise RuntimeError(f"海搜搜索返回 HTTP {status}")
-            for it in find_items(data):
-                if it["platform"] in ("", "quark", "115") and name_hit(it["title"], names):
-                    shares.setdefault(it["id"], it)
+            for page in range(1, {1: 1, 2: 2, 3: 3}[sources_depth()] + 1):
+                status, data, _ = await _search(c, q, page)
+                if status != 200 or data is None:
+                    raise RuntimeError(f"海搜搜索返回 HTTP {status}（页面脚本会给每个请求带一个签名头 x-hs-client-context，本服务不带它，站点可能因此拒绝）")
+                found = find_items(data)
+                for it in found:
+                    if it["platform"] in ("", "quark", "115") and name_hit(it["title"], names):
+                        shares.setdefault(it["id"], it)
+                if len(found) < 20:
+                    break
         sem = asyncio.Semaphore(3)
 
         async def one(it):

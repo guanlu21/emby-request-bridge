@@ -8,7 +8,9 @@ import httpx
 from . import db, litepan
 from .config import cfg
 from . import classify
-from .filters import Rules, assign_seasons, pick_best_file, select_files
+import math
+
+from .filters import Rules, assign_seasons, explain_files, pick_best_file, select_files
 from . import sources
 from . import quark as quark_mod
 from .sources import Candidate, build_candidates, parse_115_share
@@ -382,7 +384,7 @@ class Pipeline:
         """下载一个资源，并分给 rows 里的各个请求（电视剧一次求多季时，一个合集按季分到各自的 Season 目录）。
         返回已入库的季集合（电影是 {None}）；这个资源没用上返回空集合。"""
         r0 = rows[0]
-        rid0, stage = r0["id"], None
+        rid0, stage, placed = r0["id"], None, set()
         provider = c.provider if c.kind == "share" else "115"
         drive = self._drive(provider)
         pname = "夸克" if provider == "quark" else "115"
@@ -404,9 +406,10 @@ class Pipeline:
                     if st == "failed" or time.time() > deadline:
                         raise RuntimeError("离线下载失败或超时")
                     await asyncio.sleep(self.poll)
-            keep, drop = select_files(await drive.list_files(stage), rules())
+            listing = await drive.list_files(stage)
+            keep, drop = select_files(listing, rules())
             if not keep:
-                raise RuntimeError("没有符合条件的视频文件（非视频/太小/太大/分辨率不足）")
+                raise RuntimeError("没有符合条件的视频文件（" + explain_files(listing, rules()) + f"；每个视频要在 {cfg.KEEP_MIN_MB:g}MB~{cfg.MAX_GB:g}GB 之间）")
             plan = []  # [(请求, 它的文件)]
             if r0["media_type"] == "movie":
                 if len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
@@ -424,15 +427,15 @@ class Pipeline:
                         db.log(x["id"], f"这个资源里没有第 {x['season']} 季的文件")
                         continue
                     eps = meta.get("season_eps", {}).get(x["season"]) or meta.get("episodes", 0)
-                    if eps >= 4 and len(fl) < max(2, eps // 3):  # 疑似只是单集或残缺的包
-                        db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，应有约 {eps} 集，疑似不是整季，跳过")
+                    need = max(2, math.ceil(eps * cfg.SEASON_RATIO / 100)) if (eps >= 4 and cfg.SEASON_RATIO > 0) else 0
+                    if len(fl) < need:  # 疑似只是单集或残缺的包
+                        db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，已播出约 {eps} 集，至少要 {need} 个（占比 {cfg.SEASON_RATIO:g}%），疑似不是整季，跳过")
                         continue
                     plan.append((x, fl))
                 if len(by) > 1 or len(rows) > 1:
                     self._log_all(rows, "合集：" + "、".join(f"第{s}季 {len(fl)} 个" for s, fl in sorted(by.items())))
                 if not plan:
-                    raise RuntimeError("这个资源里没有哪一季的视频数量够（疑似单集或残缺的包）")
-            placed = set()
+                    raise RuntimeError("这个资源里没有哪一季的视频数量够（疑似单集或残缺的包；可以在设置里调低「整季最少集数占比」）")
             for x, fl in plan:
                 xid = x["id"]
                 db.log(xid, f"保留 {len(fl)} 个视频，丢弃 {len(keep) - len(fl) + len(drop)} 个文件")
@@ -458,7 +461,13 @@ class Pipeline:
         finally:
             if stage:
                 try:
-                    await drive.delete([stage])
+                    if cfg.KEEP_FAILED and not placed:  # 没入库的下载不删，改名留在下载目录里
+                        await drive.rename(stage, f"未入库-{rid0}-{int(time.time())}")
+                        self._log_all(rows, "这次下载的内容没有删除，已留在下载目录里（文件夹名以「未入库-」开头）")
+                    else:
+                        await drive.delete([stage])
+                        if not placed:
+                            self._log_all(rows, "这次下载的内容已从下载目录删除（想保留可以在设置里开启「保留没通过检查的下载」）")
                 except Exception:  # noqa
                     pass
 

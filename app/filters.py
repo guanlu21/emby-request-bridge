@@ -48,6 +48,29 @@ def file_ok(name: str, size: float, rules: Rules) -> bool:
     return res == 0 or res >= rules.min_res  # 文件名没写分辨率时，靠体积区间兜底
 
 
+def file_reason(name: str, size: float, rules: Rules) -> str:
+    """文件为什么不要（要的返回空串）：非视频 / 带水印 / 太小 / 太大 / 分辨率不足。"""
+    if not is_video(name):
+        return "非视频"
+    if has_watermark(name):
+        return "带水印"
+    if size < rules.keep_min:
+        return "太小"
+    if size > rules.max_size:
+        return "太大"
+    res = parse_resolution(name)
+    if res and res < rules.min_res:
+        return "分辨率不足"
+    return ""
+
+
+def explain_files(files: list[dict], rules: Rules) -> str:
+    """'共 12 个文件：太小 10、非视频 2'。"""
+    from collections import Counter
+    c = Counter(file_reason(f["name"], f["size"], rules) or "合格" for f in files)
+    return f"共 {len(files)} 个文件：" + "、".join(f"{k} {v}" for k, v in c.most_common())
+
+
 def select_files(files: list[dict], rules: Rules):
     """files: [{id,name,size}]  ->  (保留, 丢弃)"""
     keep, drop = [], []

@@ -3,3 +3,5 @@ uvicorn
 httpx
 p115client
 qrcode
+beautifulsoup4
+lxml
