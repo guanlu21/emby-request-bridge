@@ -225,6 +225,8 @@ function times(x){
 }
 const pill=s=>`<span class="pill s-${s}">${NAME[s]||s}</span>`;
 let me=null,items=[],data=[],sel=new Set(),timer=null;
+const OPEN=new Set(),LASTSIG={admin:''};   // OPEN：展开着的日志（请求 id），刷新列表时保持展开
+function toggleLog(id,open){open?OPEN.add(id):OPEN.delete(id)}
 
 async function api(path,opt={}){
   const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opt,body:opt.body?JSON.stringify(opt.body):undefined});
@@ -334,7 +336,9 @@ async function loadMine(){
 
 /* ---- 管理 ---- */
 async function loadAdmin(){
-  data=await api('/api/requests');
+  const fresh=await api('/api/requests'),sig=JSON.stringify(fresh);
+  if(sig===LASTSIG.admin&&data.length)return;   // 没有变化：不重绘，日志保持原样
+  LASTSIG.admin=sig;data=fresh;
   const u=$('usr'),cur=u.value,names=[...new Set(data.map(x=>x.requester).filter(Boolean))].sort();
   u.innerHTML='<option value="">所有用户</option>'+names.map(n=>`<option ${n==cur?'selected':''}>${esc(n)}</option>`).join('');
   renderAdmin();
@@ -346,7 +350,7 @@ function shown(){
 function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
-  <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
+  <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
   <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
   <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
 }
