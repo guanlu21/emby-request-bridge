@@ -109,7 +109,10 @@ EP_PATTERNS = [
     re.compile(r"第\s*(\d{1,3})\s*[集话話]"),
     re.compile(r"(?i)(?<![a-z0-9])EP?\s*(\d{1,3})(?!\d)"),
     re.compile(r"[\[【](\d{1,3})(?:v\d)?[\]】]"),
-    re.compile(r"\s-\s(\d{1,3})(?:v\d)?(?=[\s.\[(])"),
+    re.compile(r"\s-\s(\d{1,3})(?:v\d)?(?=[\s.(\[])"),
+    # 裸数字集数：12.mp4 这种文件名只有集数（上面的 EP? 模式要求先有字母 E，匹配不到）
+    re.compile(r"(?i)^(\d{1,3})\.(?:mp4|mkv|avi|ts|mov|wmv|mpg|mpeg|m2ts|iso|m4v|rmvb|flv)$"),  # 12.mp4
+    re.compile(r"(?i)\s(\d{1,3})(?=\.\w{1,4}$)"),  # xxx 07.mkv，空格后面的数字直接接扩展名
 ]
 
 
