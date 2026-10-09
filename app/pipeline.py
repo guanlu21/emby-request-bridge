@@ -13,7 +13,7 @@ import math
 from .filters import Rules, assign_seasons, explain_files, pick_best_file, select_files
 from . import sources
 from . import quark as quark_mod
-from .sources import Candidate, build_candidates, parse_115_share
+from .sources import Candidate, build_candidates, parse_115_share, share_provider
 
 
 class SetupError(Exception):
@@ -258,12 +258,16 @@ class Pipeline:
                     c.covers = list(c.covers) + [r["season"]]
             elif url.startswith("magnet:"):
                 c = Candidate("magnet", "手动指定", url, src="manual")
-            elif quark_mod.parse_quark_share(url):
-                c = Candidate("share", "手动指定", url, src="manual", provider="quark")
-            elif parse_115_share(url):
-                c = Candidate("share", "手动指定", url, src="manual")
             else:
-                raise RuntimeError("只支持 magnet 磁力链接、115 分享链接或夸克分享链接")
+                sp = share_provider(url, "")
+                if not sp:
+                    raise RuntimeError("只支持 magnet 磁力链接、115 分享链接或夸克分享链接")
+                c = Candidate("share", "手动指定", url, src="manual", provider=sp)
+            if c.kind == "share":
+                sp = share_provider(c.url, c.password)
+                if sp and sp != c.provider:  # 纠正候选里可能错误的网盘标注
+                    db.log(rid, f"该链接实际是{('夸克' if sp == 'quark' else '115')}分享，改用对应的网盘转存")
+                    c.provider = sp
             db.log(rid, ("替换为：" if replace else "手动指定资源：") + f"[{c.kind}] {c.title[:60]}")
             ok = await self.attempt(r, meta, c, replace_old=old)
             tried = set(json.loads(db.get(rid)["tried"]))
@@ -394,6 +398,12 @@ class Pipeline:
             raise SetupError(f"无法在 {pname} 下载目录里建文件夹（{e}）。请到「设置」里重新选择{pname}的下载目录")
         try:
             if c.kind == "share":
+                real = share_provider(c.url, c.password)  # 转存前按链接本身确认网盘，纠正候选里可能错误的标注
+                if real and real != provider:
+                    db.log(rid0, f"该链接实际是{('夸克' if real == 'quark' else '115')}分享，改用对应的网盘转存")
+                    provider, c.provider = real, real
+                drive = self._drive(provider)
+                pname = "夸克" if provider == "quark" else "115"
                 code, pw = (quark_mod.parse_quark_share(c.url, c.password) if provider == "quark" else parse_115_share(c.url, c.password))
                 await drive.receive_share(code, pw, stage)
             else:

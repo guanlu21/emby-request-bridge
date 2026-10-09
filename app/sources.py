@@ -66,11 +66,24 @@ async def tmdb_meta(media_type: str, tmdb_id: int, season):
 
 def parse_115_share(url: str, password: str = ""):
     u = urlparse(url)
+    netloc = (u.netloc or "").lower()
     m = re.search(r"/s/([a-z0-9]+)", u.path)
-    if not m:
+    # 115 分享的链接头。 PanSou 的 merged_by_type 偶尔会把别的网盘（如夸克）混进 "115" 分组，
+    # 只按路径匹配会把 pan.quark.cn/s/xxx 误判成 115 分享，转存时报「参数错误」。
+    if not m or ("quark" in netloc or not (netloc.endswith("115.com") or "115" in netloc or "anxiaoyun" in netloc)):
         return None
     pw = password or (parse_qs(u.query).get("password") or [""])[0]
     return m.group(1), pw
+
+
+def share_provider(url: str, password: str = "") -> str:
+    """按链接本身判断分享属于哪个网盘：quark / 115；都不是返回空。
+    用来在转存前纠正候选里可能错误的 provider 标注。"""
+    if quark.parse_quark_share(url, password):
+        return "quark"
+    if parse_115_share(url, password):
+        return "115"
+    return ""
 
 
 def depth() -> int:
@@ -109,8 +122,11 @@ async def search_pansou(c: httpx.AsyncClient, kw: str, refresh: bool = False) ->
     data = (r.json().get("data") or {}).get("merged_by_type") or {}
     out = []
     for it in data.get("115", []):
-        if parse_115_share(it.get("url", ""), it.get("password", "")):
-            out.append(Candidate("share", it.get("note", ""), it["url"], it.get("password", ""), src="pansou"))
+        pw = it.get("password", "")
+        if parse_115_share(it.get("url", ""), pw):
+            out.append(Candidate("share", it.get("note", ""), it["url"], pw, src="pansou"))
+        elif quark.parse_quark_share(it.get("url", ""), pw):  # merged_by_type 偶尔把夸克链接混进 115 分组
+            out.append(Candidate("share", it.get("note", ""), it["url"], pw, src="pansou", provider="quark"))
     for it in data.get("quark", []):
         if quark.parse_quark_share(it.get("url", ""), it.get("password", "")):
             out.append(Candidate("share", it.get("note", ""), it["url"], it.get("password", ""), src="pansou", provider="quark"))
