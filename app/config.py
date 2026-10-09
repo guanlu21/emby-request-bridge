@@ -53,10 +53,6 @@ class _Env:
     DRIVE_PREFER = os.environ.get("DRIVE_PREFER", "any")
     RULE_ENGINES = os.environ.get("RULE_ENGINES", "磁力帝,BitSearch")
     RULES_PROXY = os.environ.get("RULES_PROXY", "1") not in ("0", "false", "")
-    HAISOU_ON = os.environ.get("HAISOU_ON", "0") not in ("0", "false", "")
-    HAISOU_URL = os.environ.get("HAISOU_URL", "https://haisou.cc")
-    HAISOU_BODY = os.environ.get("HAISOU_BODY", '{"query": "{kw}", "filters": {"scope": "title", "platforms": ["quark", "115"], "include_filtered": false, "exclude_same_file_hsids": []}, "pagination": {"page": 1, "page_size": 20}}')
-    HAISOU_FETCH_BODY = os.environ.get("HAISOU_FETCH_BODY", "{}")
     DYG_URL = os.environ.get("DYG_URL", "https://www.dyg7.com")
     DYG_ON = os.environ.get("DYG_ON", "1") not in ("0", "false", "")
 

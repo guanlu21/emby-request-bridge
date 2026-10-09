@@ -8,7 +8,7 @@ from urllib.parse import urlparse, parse_qs
 
 import httpx
 
-from . import cloudsaver, dyg, haisou, kite, quark, rules
+from . import cloudsaver, dyg, kite, quark, rules
 from .config import cfg
 from collections import Counter
 
@@ -133,7 +133,7 @@ async def _kite_search(ks, q: str, limit: int = 50) -> list[Candidate]:
 
 # 每个搜索源：(同时最多几个请求, 单个请求超时秒数)。并发太多时 PanSou / CloudSaver 会被压垮，结果全部超时，
 # 所以一个源一次只放几个请求，其余排队；整体有个期限，到点就用已经拿到的结果，不会因为个别请求卡住而一无所获。
-LIMITS = {"PanSou": (3, 30), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "磁力站": (3, 45), "电影港": (1, 60), "海搜": (1, 60)}
+LIMITS = {"PanSou": (3, 30), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "磁力站": (3, 45), "电影港": (1, 60)}
 DEADLINE = {1: 60, 2: 120, 3: 200}
 
 
@@ -214,8 +214,6 @@ async def search_all(meta: dict, media_type: str, seasons):
                 jobs += [("CloudSaver", lambda q=q: _cloudsaver_search(csv, q)) for q in qs[:n_cs]]
             if cfg.DYG_ON and cfg.DYG_URL:
                 jobs.append(("电影港", lambda: dyg.search_many(meta["names"], qs[:3], media_type)))
-            if cfg.HAISOU_ON:
-                jobs.append(("海搜", lambda: haisou.search_many(meta["names"], qs[:3])))
             if rules.configured():  # 磁力帝、BitSearch 等：按纸鸢磁力的规则由本服务直接去搜
                 names = meta["names"]
                 rq = list(dict.fromkeys([names[0]] + ([f"{names[0]} {meta['year']}"] if meta["year"] else []) + names[1:2]))[:{1: 1, 2: 3, 3: 4}[level]]

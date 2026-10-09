@@ -1500,33 +1500,6 @@ class RulesEngineTest(unittest.TestCase):
         self.assertEqual(len(got), 1); self.assertIn("1080P", got[0].title)
 
 
-class HaisouTest(unittest.TestCase):
-    def test_request_body_matches_the_captured_schema_and_pages(self):
-        from app import haisou
-        from app.config import cfg
-        b = haisou.build_body(cfg.HAISOU_BODY, "流浪地球", 2)
-        self.assertEqual(b["query"], "流浪地球")
-        self.assertEqual(b["filters"]["platforms"], ["quark", "115"])                      # 只要我们支持的两个网盘
-        self.assertEqual((b["filters"]["scope"], b["pagination"]), ("title", {"page": 2, "page_size": 20}))
-        self.assertEqual(haisou.build_body('{"keyword": "{kw}", "page": 1, "size": 30}', "x")["query"], "x")   # 旧版猜的默认值自动换成新的
-
-    def test_fetch_links_are_found_without_knowing_field_names(self):
-        from app import haisou
-        data = {"code": 0, "data": {"share": {"url": "https://pan.quark.cn/s/abc123def456", "extract_code": "k9x2"}}}
-        links = haisou.extract_links(data)
-        self.assertEqual([(l["provider"], l["url"], l["password"]) for l in links], [("quark", "https://pan.quark.cn/s/abc123def456", "k9x2")])
-        data = {"links": ["https://115.com/s/sw123?password=1234", "https://pan.baidu.com/s/xyz"]}
-        self.assertEqual([l["provider"] for l in haisou.extract_links(data)], ["115"])        # 百度等不要
-
-    def test_find_items_is_schema_tolerant(self):
-        from app import haisou
-        data = {"data": {"items": [{"id": "OAqJWg4ki2", "title": "流浪地球 2019 4K", "platform": "quark", "size": 1000},
-                                   {"id": "3U1vBTKjLE", "name": "流浪地球", "type": "115"},
-                                   {"id": "zz", "title": "某百度资源", "platform": "baidu"}]}}
-        items = haisou.find_items(data)
-        self.assertEqual([(i["id"], i["platform"]) for i in items], [("OAqJWg4ki2", "quark"), ("3U1vBTKjLE", "115"), ("zz", "other")])
-
-
 class ApprovalTest(unittest.TestCase):
     def test_pending_promote_batch(self):
         a = db.create("movie", 900, None, "A (2020)", "小明", "pending")

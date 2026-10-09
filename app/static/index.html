@@ -437,14 +437,14 @@ async function doDelete(){
 /* ---- 设置：按类别分组，一次只显示一组 ---- */
 let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false,ACTIVE='';
 const CATS=[['连接',['Emby','115 网盘','夸克网盘','资源搜索','代理与 TMDB']],['入库',['入库分类','命名格式','LitePan 联动']],['规则',['选源规则','关键词筛选','审批与限额']]];
-const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','夸克网盘':'夸克的 Cookie 和两个目录。夸克只能转存分享链接（没有磁力离线下载）；不设就不会使用夸克。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115/夸克分享链接）、电影港（磁力+分享）和纸鸢磁力（磁力）。',
+const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','夸克网盘':'夸克的 Cookie 和两个目录。夸克只能转存分享链接（没有磁力离线下载）；不设就不会使用夸克。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115/夸克分享链接）、电影港（磁力+分享）、磁力站（磁力帝、BitSearch…）和纸鸢磁力（磁力）。',
   '代理与 TMDB':'TMDB 搜索和海报用的代理与接口地址。','入库分类':'下载完成后按 TMDB 信息自动放进哪些目录。','命名格式':'文件夹和文件的命名模板，默认带 TMDB 编号。',
   'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。'};
 const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
     <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
     <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
   '夸克网盘':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testQuark()">测试夸克连接</button></div>`,
-  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testDyg()">测试电影港</button><button class="btn" onclick="testRules()">测试磁力站</button><button class="btn" onclick="testHaisou()">测试海搜</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
+  '资源搜索':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testCs()">测试 CloudSaver</button><button class="btn" onclick="testDyg()">测试电影港</button><button class="btn" onclick="testRules()">测试磁力站</button><button class="btn" onclick="testKite()">测试纸鸢磁力</button></div>`,
   '代理与 TMDB':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testSet()">测试 TMDB 连通性</button></div>`,
   'LitePan 联动':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testLp()">测试连接</button><button class="btn" onclick="triggerLp()">手动触发联动</button><button class="btn" onclick="showSources()">联动来源清单</button></div>`};
 
@@ -521,12 +521,6 @@ const testRules=()=>runTest('/api/settings/rules/test',r=>{
   (r.results||[]).forEach(x=>L.push(x.error?`· ${x.engine}：失败 ${x.error}`:`· ${x.engine}：HTTP ${x.status}，解析出 ${x.items} 条，其中 ${x.magnets} 条带磁力${x.first?'，例：'+x.first:''}`));
   if(!(r.results||[]).length)L.push('· 没有可用的引擎：检查「磁力站」里填的名字');
   L.push('','可用的引擎名：'+(r.available||[]).join('、'));
-  return L.join('\n')});
-const testHaisou=()=>runTest('/api/settings/haisou/test',r=>{
-  if(!r.ok)return '失败：'+r.error;
-  const L=[`海搜测试：POST ${r.url} → HTTP ${r.status}`,`解析出 ${r.parsed} 个分享条目${(r.sample||[]).length?'，例：'+r.sample.join('；'):''}`,'','搜索返回的前 600 字：',r.raw||''];
-  if(r.fetch_status!==undefined)L.push('',`取链接 → HTTP ${r.fetch_status}，找到的链接：${(r.links||[]).join('、')||'无'}`,'返回的前 400 字：',r.fetch_raw||'');
-  if(r.fetch_error)L.push('','取链接失败：'+r.fetch_error);
   return L.join('\n')});
 const testSet=()=>runTest('/api/settings/test',r=>r.ok?`TMDB 连接正常（${r.ms} ms）`:'失败：'+r.error);
 const testCs=()=>runTest('/api/settings/cloudsaver/test',r=>r.ok?`CloudSaver 连接正常：试搜「流浪地球」得到 ${r.count} 条 115 链接${r.first?'，例：'+r.first.slice(0,30):''}`:'失败：'+r.error,'测试中…（CloudSaver 搜索可能要十几秒）');
