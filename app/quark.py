@@ -113,14 +113,23 @@ class QuarkDrive:
         return out
 
     # ---------------------------------------------------------------- 文件操作
+    async def _fallback_move_delete(self, path: str, ids: list, extra: dict) -> dict:
+        """批量移动/删除接口新旧两版参数不同：新版用 filelist（fid 字符串数组），旧版用 action_type+filter_fids。
+        先按新版发，报参数错误再回退旧版。"""
+        new = {"filelist": [str(i) for i in ids], **extra}
+        try:
+            return await self._req("POST", path, json=new)
+        except QuarkError:
+            old = {"action_type": 2, "filter_fids": [str(i) for i in ids], **extra}
+            return await self._req("POST", path, json=old)
+
     async def move(self, ids, dest):
-        j = await self._req("POST", "/file/move", json={"action_type": 2, "exclude_fids": [], "filter_fids": [str(i) for i in ids],
-                                                         "to_pdir_fid": str(dest)})
+        j = await self._fallback_move_delete("/file/move", ids, {"exclude_fids": [], "to_pdir_fid": str(dest)})
         if (j.get("data") or {}).get("task_id"):
             await self._wait_task(j["data"]["task_id"])
 
     async def delete(self, ids):
-        j = await self._req("POST", "/file/delete", json={"action_type": 2, "filter_fids": [str(i) for i in ids], "exclude_fids": []})
+        j = await self._fallback_move_delete("/file/delete", ids, {"exclude_fids": []})
         if (j.get("data") or {}).get("task_id"):
             await self._wait_task(j["data"]["task_id"])
 
@@ -149,8 +158,24 @@ class QuarkDrive:
             page += 1
         if not fids:
             raise QuarkError("分享为空或已失效")
-        j = await self._req("POST", "/share/sharepage/save", json={"fid_list": fids, "fid_token_list": tokens, "to_pdir_fid": str(dest),
-                                                                    "pwd_id": pwd_id, "stoken": stoken, "pdir_fid": "0", "scene": "link"})
+        # 夸克新旧两版转存接口参数不同：新版用 current_dir_fid + filelist（元素是 {fid, share_fid_token} 对象），
+        # 旧版用 fid_list + fid_token_list；接口改版后旧参数被视为空，报「current_dir_fid/filelist 不能同时为空」。
+        # 先按新版发，响应里没有 task_id 再回退旧版参数。
+        files = [{"fid": f, "share_fid_token": t} for f, t in zip(fids, tokens)]
+        payload = {"current_dir_fid": "0", "filelist": files, "to_pdir_fid": str(dest),
+                   "pwd_id": pwd_id, "stoken": stoken, "pdir_fid": "0", "scene": "link"}
+        try:
+            j = await self._req("POST", "/share/sharepage/save", json=payload)
+        except QuarkError:  # 新版参数不被当前接口接受时尝试旧版参数
+            j = await self._req("POST", "/share/sharepage/save",
+                                json={"fid_list": fids, "fid_token_list": tokens, "to_pdir_fid": str(dest),
+                                      "pwd_id": pwd_id, "stoken": stoken, "pdir_fid": "0", "scene": "link",
+                                      "on_dup": "ignore"})
+        if not (j.get("data") or {}).get("task_id"):
+            j = await self._req("POST", "/share/sharepage/save",
+                                json={"fid_list": fids, "fid_token_list": tokens, "to_pdir_fid": str(dest),
+                                      "pwd_id": pwd_id, "stoken": stoken, "pdir_fid": "0", "scene": "link",
+                                      "on_dup": "ignore"})
         await self._wait_task(j["data"]["task_id"])
 
     async def close(self):
