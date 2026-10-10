@@ -13,7 +13,7 @@ import math
 from .filters import Rules, assign_seasons, explain_files, pick_best_file, select_files
 from . import sources
 from . import quark as quark_mod
-from .sources import Candidate, build_candidates, parse_115_share, share_provider
+from .sources import Candidate, build_candidates, parse_115_share, share_provider, split_manual_url
 
 
 class SetupError(Exception):
@@ -234,9 +234,7 @@ class Pipeline:
         return ok
 
     async def run_manual(self, rid: int, url: str):
-        """手动指定资源。已完成（已入库）的请求按「替换」处理：新资源通过筛选后才删旧文件。"""
-        r = db.get(rid)
-        await self.run_candidate(rid, url, replace=bool(r and r["status"] == "done"))
+        await self.run_candidate(rid, url, replace=False)
 
     async def run_candidate(self, rid: int, url: str, replace: bool = False):
         """使用指定资源（候选列表里的，或手动粘贴的 115 分享/磁力链接）。
@@ -252,19 +250,21 @@ class Pipeline:
             db.update(rid, status="downloading", error="")
             await self.usable_providers(r)
             meta = await self.meta_fn(r)
-            url = url.strip()
+            url, pw = split_manual_url(url.strip())  # 支持粘贴「链接 提取码：xxx」这样的文本
             known = next((d for d in json.loads(r["cands"] or "[]") + json.loads(r["rejects"] or "[]") if d["url"] == url), None)
             if known:
                 c = cand_from(known)
+                if pw and not c.password:
+                    c.password = pw  # 粘贴文本里带来的提取码优先于候选里的空值
                 if r["media_type"] == "tv" and r["season"] not in c.covers:
                     c.covers = list(c.covers) + [r["season"]]
             elif url.startswith("magnet:"):
                 c = Candidate("magnet", "手动指定", url, src="manual")
             else:
-                sp = share_provider(url, "")
+                sp = share_provider(url, pw)
                 if not sp:
-                    raise RuntimeError("只支持 magnet 磁力链接、115 分享链接或夸克分享链接")
-                c = Candidate("share", "手动指定", url, src="manual", provider=sp)
+                    raise RuntimeError("只支持 magnet 磁力链接、115 分享链接或夸克分享链接（可带提取码）")
+                c = Candidate("share", "手动指定", url, pw, src="manual", provider=sp)
             if c.kind == "share":
                 sp = share_provider(c.url, c.password)
                 if sp and sp != c.provider:  # 纠正候选里可能错误的网盘标注

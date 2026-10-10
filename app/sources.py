@@ -76,6 +76,17 @@ def parse_115_share(url: str, password: str = ""):
     return m.group(1), pw
 
 
+def split_manual_url(text: str) -> tuple[str, str]:
+    """手动粘贴的分享文本里常常带上提取码，如「链接 提取码：xxxx」「链接?密码 abcd」「链接，访问码 1234」。
+    返回 (纯链接, 提取码)；没有提取码就原样返回 (text, "")。"""
+    t = (text or "").strip()
+    m = re.match(r'^(\S+://\S+?)\s*[，,;；\s]*(?:提取码|访问码|密码|密碼|pwd|passcode)\s*[:：=]?\s*([A-Za-z0-9]{2,10})\s*$', t, re.I)
+    if m:
+        return m.group(1).strip(), m.group(2)
+    # 链接自带 ?pwd= / ?password= 的直接交给解析器，这里不再拆
+    return t, ""
+
+
 def share_provider(url: str, password: str = "") -> str:
     """按链接本身判断分享属于哪个网盘：quark / 115；都不是返回空。
     用来在转存前纠正候选里可能错误的 provider 标注。"""
