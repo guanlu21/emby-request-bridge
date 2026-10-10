@@ -37,7 +37,7 @@ def source_for(category: str) -> str:
     """联动来源模板里的 {category} 换成分类名；模板里没有 {category} 就所有分类用同一个来源。
     115 和夸克分开联动：夸克入库的 category 带「夸克-」前缀，模板没写 {category} 时也按前缀补上，
     保证夸克和 115 走 LitePan 里不同的联动。"""
-    s = (cfg.LITEPAN_SOURCE or "")
+    s = (cfg.LITEPAN_SOURCE or "").strip() or "RequestBridge"  # 留空时用默认基础名，保证来源和 LitePan 联动里的填写值能对上
     if "{category}" not in s:
         tag = "夸克-" if (category or "").startswith("夸克") else ""
         return (tag + s).strip("-")

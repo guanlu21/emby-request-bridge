@@ -58,7 +58,7 @@ SCHEMA = [
         F("litepan_url", "LitePan 地址", help="例如 http://192.168.1.10:5211；留空则不联动，改由本服务等一会儿后通知 Emby 刷新"),
         F("litepan_key", "LitePan API 秘钥", "password", "LitePan → 系统设置 → API 秘钥，新建「任务执行」型（lpk_api_ 开头）；STRM Key 和只读 Key 不能用"),
         F("litepan_event", "联动通知名称", help="要和 LitePan 自动联动里「第三方通知」填的名称一致", default="download_completed"),
-        F("litepan_source", "联动来源（可选）", help="LitePan 联动里填了来源才需要一致；不限来源就留空", default="RequestBridge"),
+        F("litepan_source", "联动来源（可选）", help="发通知时带的来源名，要和 LitePan 联动「第三方通知」里填的来源一致。留空时默认用 RequestBridge，夸克的入库来源自动加「夸克-」前缀（即 RequestBridge 和 夸克-RequestBridge 两条）", default="RequestBridge"),
         F("litepan_delay", "合并等待（秒）", "number", "文件进入正式目录后等这么久再通知；这段时间内的多次求片合并成一次通知", default=20),
         F("litepan_wait", "未联动时等待（秒）", "number", "没配 LitePan 时，文件落盘后等这么久再通知 Emby 刷新媒体库", default=120),
     ]},
