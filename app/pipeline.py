@@ -60,7 +60,7 @@ class Pipeline:
         for x in rows:
             db.log(x["id"], msg)
 
-    async def run(self, rid: int, depth: int = 0):
+    async def run(self, rid: int, depth: int = 0, append: dict = None):
         r = db.get(rid)
         if not r:
             return
@@ -71,14 +71,17 @@ class Pipeline:
         self._active.update(ids)
         token = sources.DEPTH.set(depth) if depth else None
         try:
-            await self._run_rows(rows)
+            await self._run_rows(rows, append=append)
         finally:
             self._active.difference_update(ids)
             if token is not None:
                 sources.DEPTH.reset(token)
 
-    def _fail_all(self, rows, msg):
+    def _fail_all(self, rows, msg, restore_done=False):
         for x in rows:
+            if restore_done and x.get("_was_done"):
+                db.update(x["id"], status="done", error="追加集数失败，原有集数不受影响（详情看日志）")
+                continue
             if db.get(x["id"])["status"] != "done":
                 db.update(x["id"], status="failed", error=msg[:200])
 
@@ -103,8 +106,11 @@ class Pipeline:
         for x in rows:
             db.update(x["id"], cands=data, rejects=rej, cands_at=time.time())
 
-    async def _run_rows(self, rows):
+    async def _run_rows(self, rows, append: dict = None):
         r = rows[0]
+        if append:  # 追加模式：记住这些请求原本已入库，失败时恢复 done 而不是标成 failed
+            for x in rows:
+                x["_was_done"] = True
         try:
             usable = await self.usable_providers(r)
             for x in rows:
@@ -143,10 +149,10 @@ class Pipeline:
                 cover = "（覆盖第 " + "、".join(str(x["season"]) for x in want) + " 季）" if r["media_type"] == "tv" else ""
                 self._log_all(want, f"尝试 {n}: [{c.kind}/{c.src}] {c.title[:60]} (分 {c.score}){cover}")
                 try:
-                    placed = await self.attempt_group(want, meta, c)
+                    placed = await self.attempt_group(want, meta, c, append_eps=append)
                 except SetupError as e:
                     self._log_all(rows, str(e))
-                    self._fail_all(list(remaining.values()), str(e))
+                    self._fail_all(list(remaining.values()), str(e), restore_done=append is not None)
                     return
                 tried.add(c.url)
                 for x in rows:
@@ -155,7 +161,7 @@ class Pipeline:
                     row = remaining.pop(s)
                     db.update(row["id"], status="done", picked=c.title, done_at=time.time())
                     await self.after_fn(row)
-            self._fail_all(list(remaining.values()), "所有候选均失败或没有符合条件的资源")
+            self._fail_all(list(remaining.values()), "所有候选均失败或没有符合条件的资源", restore_done=append is not None)
         except SetupError as e:
             self._log_all(rows, str(e))
             self._fail_all(rows, str(e))
@@ -233,12 +239,50 @@ class Pipeline:
             raise SetupError("；".join(errs) or "还没有设置网盘：请到「设置」里配置 115（或夸克）的下载目录和影视根目录")
         return ok
 
-    async def run_manual(self, rid: int, url: str):
-        await self.run_candidate(rid, url, replace=False)
+    async def run_manual(self, rid: int, url: str, append: bool = False):
+        """手动指定资源。已完成（已入库）的请求：append=True 按追加集数处理（只补新集，失败恢复已完成），否则按「替换」处理。"""
+        r = db.get(rid)
+        await self.run_candidate(rid, url, replace=bool(r and r["status"] == "done" and not append), append=append)
 
-    async def run_candidate(self, rid: int, url: str, replace: bool = False):
+    async def _eps_in_library(self, rid: int) -> dict:
+        """查这条请求已入库 Season 目录里的现有集号集合。没入库过/读不到就返回 None。"""
+        r = db.get(rid)
+        try:
+            p = json.loads(r["placed"] or "null")
+        except ValueError:
+            p = None
+        if not p or not p.get("dest") or not p.get("files"):
+            return None
+        provider = p.get("provider", "115")
+        drive = self._drive(provider)
+        have = set()
+        try:
+            listing = await drive.list_files(self._cid(provider, p["dest"]))
+        except Exception:  # noqa
+            return None
+        for f in listing:
+            ep = classify.episode_of(f["name"])
+            if ep is not None:
+                have.add(ep)
+        if not have:  # 目录里认不出任何集号（可能是电影或命名无法解析），不启用追加
+            return None
+        return {r["season"]: have}
+
+    async def run_append(self, rid: int, depth: int = 0):
+        """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。
+        目录里认不出已有集数时提示改用重试整季。"""
+        have = await self._eps_in_library(rid)
+        if have is None:
+            db.log(rid, "追加前检查：找不到已入库的 Season 目录或认不出已有集号，请改用「重新搜索/重试」整季处理")
+            return
+        season = next(iter(have))
+        db.log(rid, f"追加集数：库里第 {season} 季已有 {len(have[season])} 集（{min(have[season])}~{max(have[season])}），开始搜索，只补新集")
+        await self.run(rid, depth, append=have)
+
+    async def run_candidate(self, rid: int, url: str, replace: bool = False, append: bool = False):
         """使用指定资源（候选列表里的，或手动粘贴的 115 分享/磁力链接）。
-        replace=True：新资源下载并通过筛选后，才会删除之前入库的文件；新资源失败时原文件保留、状态不变。"""
+        replace=True：新资源下载并通过筛选后，才会删除之前入库的文件；新资源失败时原文件保留、状态不变。
+        append=True：追加模式——已入库的剧只补库里没有的新集，原文件不动（append 优先于 replace）。"""
         r = db.get(rid)
         old = None
         try:
@@ -270,8 +314,11 @@ class Pipeline:
                 if sp and sp != c.provider:  # 纠正候选里可能错误的网盘标注
                     db.log(rid, f"该链接实际是{('夸克' if sp == 'quark' else '115')}分享，改用对应的网盘转存")
                     c.provider = sp
-            db.log(rid, ("替换为：" if replace else "手动指定资源：") + f"[{c.kind}] {c.title[:60]}")
-            ok = await self.attempt(r, meta, c, replace_old=old)
+            db.log(rid, ("替换为：" if replace else "追加资源：" if append else "手动指定资源：") + f"[{c.kind}] {c.title[:60]}")
+            append_eps = await self._eps_in_library(rid) if (append and r["media_type"] == "tv") else None
+            if append and append_eps is None:
+                db.log(rid, "追加前检查：找不到已入库的 Season 目录或认不出已有集号，按整季处理")
+            ok = await self.attempt(r, meta, c, replace_old=None if append else old, append_eps=append_eps)
             tried = set(json.loads(db.get(rid)["tried"]))
             tried.add(c.url)
             db.update(rid, tried=json.dumps(sorted(tried)))
@@ -280,12 +327,16 @@ class Pipeline:
                 await self.after_fn(r)
             elif replace and old:
                 db.update(rid, status="done", error="替换失败，原资源保留（详情看日志）")
+            elif append and append_eps is not None:
+                db.update(rid, status="done", error="追加失败，原有集数不受影响（详情看日志）")
             else:
                 db.update(rid, status="failed", error="这个资源也失败了，详情看日志")
         except Exception as e:  # noqa
             db.log(rid, str(e) if isinstance(e, SetupError) else f"异常: {e!r}")
             if replace and old:
                 db.update(rid, status="done", error=("替换失败，原资源保留：" + str(e))[:200])
+            elif append and append_eps is not None:
+                db.update(rid, status="done", error=("追加失败，原有集数不受影响：" + str(e))[:200])
             else:
                 db.update(rid, status="failed", error=str(e)[:200])
 
@@ -383,12 +434,13 @@ class Pipeline:
         if done:
             db.log(rid, f"已按命名格式重命名 {done} 个文件")
 
-    async def attempt(self, r, meta, c, replace_old=None) -> bool:
-        return bool(await self.attempt_group([r], meta, c, replace_old))
+    async def attempt(self, r, meta, c, replace_old=None, append_eps=None) -> bool:
+        return bool(await self.attempt_group([r], meta, c, replace_old, append_eps))
 
-    async def attempt_group(self, rows, meta, c, replace_old=None) -> set:
+    async def attempt_group(self, rows, meta, c, replace_old=None, append_eps=None) -> set:
         """下载一个资源，并分给 rows 里的各个请求（电视剧一次求多季时，一个合集按季分到各自的 Season 目录）。
-        返回已入库的季集合（电影是 {None}）；这个资源没用上返回空集合。"""
+        返回已入库的季集合（电影是 {None}）；这个资源没用上返回空集合。
+        append_eps：{季: 已入库的集号集合}。给了就是「追加模式」——只保留库中没有的新集、跳过整季占比检查。"""
         r0 = rows[0]
         rid0, stage, placed = r0["id"], None, set()
         provider = c.provider if c.kind == "share" else "115"
@@ -438,11 +490,28 @@ class Pipeline:
                     if not fl:
                         db.log(x["id"], f"这个资源里没有第 {x['season']} 季的文件")
                         continue
-                    eps = meta.get("season_eps", {}).get(x["season"]) or meta.get("episodes", 0)
-                    need = max(2, math.ceil(eps * cfg.SEASON_RATIO / 100)) if (eps >= 4 and cfg.SEASON_RATIO > 0) else 0
-                    if len(fl) < need:  # 疑似只是单集或残缺的包
-                        db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，已播出约 {eps} 集，至少要 {need} 个（占比 {cfg.SEASON_RATIO:g}%），疑似不是整季，跳过")
-                        continue
+                    have = (append_eps or {}).get(x["season"])
+                    if have is not None:  # 追加模式：只留库里没有的新集，不做整季占比检查
+                        new_fl, seen = [], set()
+                        for f in fl:
+                            ep = classify.episode_of(f["name"])
+                            if ep is None or ep in have or ep in seen:
+                                continue
+                            seen.add(ep)
+                            new_fl.append(f)
+                        dropped = len(fl) - len(new_fl)
+                        if not new_fl:
+                            db.log(x["id"], f"资源里第 {x['season']} 季的 {len(fl)} 个视频都已在库中，没有新集")
+                            continue
+                        db.log(x["id"], f"追加模式：资源里第 {x['season']} 季共 {len(fl)} 个视频，其中 {len(new_fl)} 个是新集（跳过已在库的 {dropped} 个）")
+                        fl = new_fl
+                    else:
+                        have = None
+                        eps = meta.get("season_eps", {}).get(x["season"]) or meta.get("episodes", 0)
+                        need = max(2, math.ceil(eps * cfg.SEASON_RATIO / 100)) if (eps >= 4 and cfg.SEASON_RATIO > 0) else 0
+                        if len(fl) < need:  # 疑似只是单集或残缺的包
+                            db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，已播出约 {eps} 集，至少要 {need} 个（占比 {cfg.SEASON_RATIO:g}%），疑似不是整季，跳过")
+                            continue
                     plan.append((x, fl))
                 if len(by) > 1 or len(rows) > 1:
                     self._log_all(rows, "合集：" + "、".join(f"第{s}季 {len(fl)} 个" for s, fl in sorted(by.items())))
@@ -459,7 +528,14 @@ class Pipeline:
                     await self.remove_placed(xid, replace_old, dest, provider)
                 await self.rename_files(xid, fl, x, meta, c.title, drive)
                 await drive.move([f["id"] for f in fl], dest)
-                db.update(xid, placed=json.dumps({"dest": str(dest), "files": [str(f["id"]) for f in fl], "provider": provider,
+                files = [str(f["id"]) for f in fl]
+                if have is not None:  # 追加模式：placed 里合并旧文件的记录，purge/替换时能整体删干净
+                    try:
+                        oldp = json.loads(db.get(xid)["placed"] or "null") or {}
+                        files = sorted(set(oldp.get("files") or []) | set(files), key=lambda v: int(v))
+                    except (ValueError, TypeError):
+                        pass
+                db.update(xid, placed=json.dumps({"dest": str(dest), "files": files, "provider": provider,
                                                   "chain": [str(ch) for ch in x.pop("_chain", [dest])]}))
                 placed.add(x["season"])
             return placed

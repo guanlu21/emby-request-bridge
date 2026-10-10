@@ -31,8 +31,11 @@ async def _meta(r):
     return m
 
 
-def spawn(rid):
-    t = asyncio.create_task(pipe.run(rid))
+def spawn(rid, append: bool = False, depth: int = 0):
+    if append:
+        t = asyncio.create_task(pipe.run_append(rid, depth))
+    else:
+        t = asyncio.create_task(pipe.run(rid, depth))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
 
@@ -248,6 +251,16 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
     return {"ok": True}
 
 
+@app.post("/api/requests/{rid}/append")
+def append(rid: int, request: Request, depth: int = 0, x_token: str = Header("")):
+    """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。"""
+    admin(request, x_token)
+    if not db.get(rid):
+        raise HTTPException(404)
+    spawn(rid, append=True, depth=depth)
+    return {"ok": True}
+
+
 @app.get("/api/requests/{rid}/candidates")
 def candidates(rid: int, request: Request, x_token: str = Header("")):
     """这条请求筛选出的候选资源（含满足的要求、已试过/当前使用的状态）和被过滤掉的资源（可强制使用）。"""
@@ -305,14 +318,15 @@ async def replace(rid: int, request: Request, x_token: str = Header("")):
 
 @app.post("/api/requests/{rid}/manual")
 async def manual(rid: int, request: Request, x_token: str = Header("")):
-    """给搜不到的片手动指定 115/夸克 分享链接或磁力链接；已完成的请求按替换处理。"""
+    """给搜不到的片手动指定 115/夸克 分享链接或磁力链接；已完成的请求按替换处理，append=True 按追加集数处理。"""
     admin(request, x_token)
     if not db.get(rid):
         raise HTTPException(404)
-    url = ((await request.json()).get("url") or "").strip()
+    body = await request.json()
+    url = (body.get("url") or "").strip()
     if not url:
         raise HTTPException(400, "请粘贴链接")
-    t = asyncio.create_task(pipe.run_manual(rid, url))
+    t = asyncio.create_task(pipe.run_manual(rid, url, append=bool(body.get("append"))))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
     return {"ok": True}
