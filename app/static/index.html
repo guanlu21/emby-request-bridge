@@ -176,7 +176,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
     <select id="usr" onchange="renderAdmin()"><option value="">所有用户</option></select>
     <button class="btn" onclick="selAll()">全选/取消</button>
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
-    <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button>
+    <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button><button class="btn" onclick="appendEps()" title="连载剧已入库后，只补新更新的集数">追加集数</button>
   </div>
   <small id="cnt"></small>
   <div class="wrap" style="margin-top:8px"><table class="rt adm"><thead><tr><th><input type="checkbox" id="all" onchange="toggleAll(this.checked)" aria-label="全选"></th><th>片名</th><th>求片人</th><th>时间</th><th>状态</th><th>已选资源</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
@@ -349,6 +349,7 @@ function shown(){
 }
 function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
+  window.DONE_IDS=new Set(d.filter(x=>x.status==='done').map(x=>x.id));
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
   <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
   <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
@@ -394,8 +395,7 @@ async function useCand(i){
 async function candDeep(){
   const btn=$('cdeep'),ver=CD.ver;btn.disabled=true;btn.textContent='深度搜索中…';
   try{
-    await api(`/api/requests/${CID}/research`,{method:'POST',body:{depth:3}});
-    for(let k=0;k<40;k++){            // 最多等 2 分钟，等候选列表更新
+    await api(`/api/requests/${CID}/research`,{method:'POST',body:{depth:3}});    for(let k=0;k<40;k++){            // 最多等 2 分钟，等候选列表更新
       await new Promise(r=>setTimeout(r,3000));
       if(!await loadCands())break;
       if(CD.ver!==ver&&!CD.busy)break;
@@ -407,7 +407,20 @@ async function candDeep(){
 async function manual(id){
   const url=prompt('粘贴 115 或夸克的分享链接、磁力链接（可以直接带上提取码，如「链接 提取码：xxxx」），将跳过搜索直接处理这一条：');
   if(!url)return;
-  try{await api(`/api/requests/${id}/manual`,{method:'POST',body:{url}});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
+  let body={url};
+  if(DONE_IDS.has(id)){
+    const m=confirm('确定 = 追加集数（只补库里没有的新集，原文件不动）\n取消 = 替换整季（新资源通过筛选后删除旧文件）');
+    if(m)body.append=true;
+  }
+  try{await api(`/api/requests/${id}/manual`,{method:'POST',body});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
+}
+
+async function appendEps(){
+  if(!sel.size)return toast('先勾选要追加集数的剧');
+  for(const id of sel){
+    try{await api(`/api/requests/${id}/append`,{method:'POST',body:{}})}catch(e){toast(e.message)}
+  }
+  toast('已提交追加，稍后刷新看进度');setTimeout(loadAdmin,1500)
 }
 
 
