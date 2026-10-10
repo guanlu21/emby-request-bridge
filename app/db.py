@@ -140,8 +140,8 @@ def batch(ids, action, by=""):
             if not r:
                 continue
             if action == "delete":
-                if r["status"] in ("queued", "searching", "downloading"):
-                    continue
+                # 各状态都允许删除：卡死在"下载中"的任务（如历史 bug 崩掉的后台任务）也必须能删；
+                # 真还在跑的任务对已删除的行做 UPDATE 是空操作，不会有副作用
                 c.execute("DELETE FROM requests WHERE id=?", (i,))
             else:
                 src, dst = rules[action]

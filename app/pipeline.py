@@ -492,6 +492,7 @@ class Pipeline:
             if not keep:
                 raise RuntimeError("没有符合条件的视频文件（" + explain_files(listing, rules()) + f"；每个视频要在 {cfg.KEEP_MIN_MB:g}MB~{cfg.MAX_GB:g}GB 之间）")
             plan = []  # [(请求, 它的文件)]
+            have = None  # 追加模式里该季"库里已有的集号集合"；常规模式恒为 None（电影分支不定义会 NameError）
             if r0["media_type"] == "movie":
                 if len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
                     best = pick_best_file(keep, rules())
