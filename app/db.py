@@ -72,7 +72,14 @@ def update(rid, **kw):
 def log(rid, msg):
     r = get(rid)
     lg = json.loads(r["log"])
-    lg.append(f"{time.strftime('%H:%M:%S')} {msg}")
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        import os
+        ts = datetime.now(ZoneInfo(os.environ.get("TZ") or "Asia/Shanghai")).strftime("%H:%M:%S")  # 容器默认 UTC，按本地时区显示
+    except Exception:
+        ts = time.strftime("%H:%M:%S")
+    lg.append(f"{ts} {msg}")
     update(rid, log=json.dumps(lg[-60:], ensure_ascii=False))
 
 

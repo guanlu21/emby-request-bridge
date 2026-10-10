@@ -271,13 +271,18 @@ class Pipeline:
     async def run_append(self, rid: int, depth: int = 0):
         """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。
         目录里认不出已有集数时提示改用重试整季。"""
-        have = await self._eps_in_library(rid)
-        if have is None:
-            db.log(rid, "追加前检查：找不到已入库的 Season 目录或认不出已有集号，请改用「重新搜索/重试」整季处理")
-            return
-        season = next(iter(have))
-        db.log(rid, f"追加集数：库里第 {season} 季已有 {len(have[season])} 集（{min(have[season])}~{max(have[season])}），开始搜索，只补新集")
-        await self.run(rid, depth, append=have)
+        try:
+            have = await self._eps_in_library(rid)
+            if have is None:
+                db.log(rid, "追加前检查：找不到已入库的 Season 目录或认不出已有集号，请改用「重新搜索/重试」整季处理")
+                return
+            season = next(iter(have))
+            db.log(rid, f"追加集数：库里第 {season} 季已有 {len(have[season])} 集（{min(have[season])}~{max(have[season])}），开始搜索，只补新集")
+            await self.run(rid, depth, append=have)
+        except Exception as e:  # noqa：后台任务里的异常没人接，必须落日志，否则看起来就是"没反应"
+            db.log(rid, f"追加集数失败: {e!r}")
+            if db.get(rid)["status"] != "done":
+                db.update(rid, status="failed", error=("追加失败：" + str(e))[:200])
 
     async def run_candidate(self, rid: int, url: str, replace: bool = False, append: bool = False):
         """使用指定资源（候选列表里的，或手动粘贴的 115 分享/磁力链接）。

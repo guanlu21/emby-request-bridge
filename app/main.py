@@ -252,8 +252,9 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
 
 
 @app.post("/api/requests/{rid}/append")
-def append(rid: int, request: Request, depth: int = 0, x_token: str = Header("")):
-    """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。"""
+async def append(rid: int, request: Request, depth: int = 0, x_token: str = Header("")):
+    """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。
+    必须是 async：spawn 用 asyncio.create_task 建任务，同步端点跑在线程池里拿不到事件循环会静默失败。"""
     admin(request, x_token)
     if not db.get(rid):
         raise HTTPException(404)
