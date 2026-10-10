@@ -352,7 +352,7 @@ function renderAdmin(){
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
   <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
   <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
-  <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
+  <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['done','failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
 }
 
 let CD=null,CTAB='c',CSHOW=20,CID=0;
@@ -405,7 +405,7 @@ async function candDeep(){
   btn.disabled=false;btn.textContent='深度搜索';
 }
 async function manual(id){
-  const url=prompt('粘贴 115 分享链接或磁力链接，将跳过搜索直接处理这一条：');
+  const url=prompt('粘贴 115 或夸克的分享链接、磁力链接，将跳过搜索直接处理这一条：');
   if(!url)return;
   try{await api(`/api/requests/${id}/manual`,{method:'POST',body:{url}});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
 }
