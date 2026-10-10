@@ -10,7 +10,7 @@ from .config import cfg
 from . import classify
 import math
 
-from .filters import Rules, assign_seasons, explain_files, pick_best_file, select_files
+from .filters import Rules, assign_seasons, explain_files, pair_subs, pick_best_file, select_files
 from . import sources
 from . import quark as quark_mod
 from .sources import Candidate, build_candidates, parse_115_share, share_provider, split_manual_url
@@ -418,8 +418,9 @@ class Pipeline:
         db.log(r["id"], f"已删除{'夸克' if provider == 'quark' else '115'}网盘里的 {len(placed['files'])} 个文件")
         return len(placed["files"])
 
-    async def rename_files(self, rid, files, r, meta, hint="", drive=None):
-        """按命名模板改名（带 TMDB 编号等）；任何一步失败都只记日志，保留原文件名，不影响入库。"""
+    async def rename_files(self, rid, files, r, meta, hint="", drive=None, sub_map=None):
+        """按命名模板改名（带 TMDB 编号等）；字幕跟着对应视频一起改（Emby 才能挂上字幕）。
+        任何一步失败都只记日志，保留原文件名，不影响入库。"""
         try:
             fn = (drive or self.drive).rename
         except Exception:  # noqa
@@ -433,6 +434,16 @@ class Pipeline:
                 await fn(f["id"], new)
                 f["name"] = new
                 done += 1
+                for s in (sub_map or {}).get(f["id"], []):  # 字幕沿用视频新名 + 原字幕后缀：20.chs.srt -> 新名.chs.srt
+                    stem, _, ext = s["name"].partition(".")
+                    tail = s["name"][len(stem):]  # 保留 .chs.srt 这类语言标记
+                    sname = new.rsplit(".", 1)[0] + tail
+                    try:
+                        await fn(s["id"], sname)
+                        s["name"] = sname
+                        done += 1
+                    except Exception:  # noqa
+                        pass
             except Exception as e:  # noqa
                 db.log(rid, f"重命名失败（保留原名）：{e}")
                 return
@@ -477,6 +488,7 @@ class Pipeline:
                     await asyncio.sleep(self.poll)
             listing = await drive.list_files(stage)
             keep, drop = select_files(listing, rules())
+            sub_map, sub_orphan = pair_subs(listing, keep)  # 字幕跟视频一起入库，不能丢
             if not keep:
                 raise RuntimeError("没有符合条件的视频文件（" + explain_files(listing, rules()) + f"；每个视频要在 {cfg.KEEP_MIN_MB:g}MB~{cfg.MAX_GB:g}GB 之间）")
             plan = []  # [(请求, 它的文件)]
@@ -531,9 +543,17 @@ class Pipeline:
                     raise SetupError(f"无法在 {pname} 影视目录里建文件夹（{e}）。请到「设置」里重新选择{pname}的影视根目录")
                 if replace_old and len(rows) == 1:
                     await self.remove_placed(xid, replace_old, dest, provider)
-                await self.rename_files(xid, fl, x, meta, c.title, drive)
-                await drive.move([f["id"] for f in fl], dest)
-                files = [str(f["id"]) for f in fl]
+                await self.rename_files(xid, fl, x, meta, c.title, drive, sub_map=sub_map)
+                ids = [f["id"] for f in fl]
+                nsub = 0
+                for f in fl:
+                    for s in sub_map.get(f["id"], []):
+                        ids.append(s["id"])
+                        nsub += 1
+                await drive.move(ids, dest)
+                if nsub:
+                    db.log(xid, f"随视频一起入库 {nsub} 个字幕文件")
+                files = [str(f["id"]) for f in fl]  # placed 里只记视频，purge/替换按视频清理
                 if have is not None:  # 追加模式：placed 里合并旧文件的记录，purge/替换时能整体删干净
                     try:
                         oldp = json.loads(db.get(xid)["placed"] or "null") or {}

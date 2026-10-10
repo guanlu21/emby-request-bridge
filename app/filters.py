@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 GB = 1024 ** 3
 VIDEO_EXT = {".mkv", ".mp4", ".ts", ".m2ts", ".avi", ".mov", ".wmv", ".flv", ".rmvb", ".webm"}
+SUB_EXT = {".srt", ".ass", ".ssa", ".sup", ".sub", ".vtt"}  # 字幕跟着视频一起入库，不能丢
 BAD_TAGS = re.compile(r"(?i)(?<![a-z])(cam|hdcam|hdts|hdtc|telesync|telecine|screener|tc|ts)(?![a-z])|枪版")
 CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -37,6 +38,34 @@ def parse_resolution(title: str) -> int:
 def is_video(name: str) -> bool:
     n = name.lower()
     return any(n.endswith(e) for e in VIDEO_EXT)
+
+
+def is_sub(name: str) -> bool:
+    n = name.lower()
+    return any(n.endswith(e) for e in SUB_EXT)
+
+
+def pair_subs(files: list[dict], keep: list[dict]):
+    """把字幕文件配给同集数的保留视频。返回 ({视频id: [字幕,...]}, 没配上视频的字幕)。
+    按文件名里的集号配对（20.mp4 ↔ 20.chs.srt、S01E20.mkv ↔ S01E20.ass 都能配上）；
+    同一集有多个字幕（如简体+繁体）都保留。"""
+    subs = [f for f in files if is_sub(f["name"])]
+    if not subs:
+        return {}, []
+    eps = {}
+    for f in keep:
+        e = classify.episode_of(f["name"])
+        if e is not None:
+            eps.setdefault(e, []).append(f)
+    out, orphan = {}, []
+    for s in subs:
+        e = classify.episode_of(s["name"])
+        match = eps.get(e) if e is not None else None
+        if match and len(match) == 1:  # 一集多个同名视频版本时不乱配，留作未配
+            out.setdefault(match[0]["id"], []).append(s)
+        else:
+            orphan.append(s)
+    return out, orphan
 
 
 def file_ok(name: str, size: float, rules: Rules) -> bool:

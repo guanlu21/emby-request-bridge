@@ -336,11 +336,19 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
             if re.search(r"全集|合集|打包|完结|全\s*\d+\s*集|(?i:complete)", c.title):
                 c.score += 8
             rng = re.search(r"(?<![\dSsEe第季.])(\d{1,3})\s*[-~至]\s*(\d{1,3})(?![\dpPkK季])", c.title)
+            upd = re.search(r"更新\s*(?:至|到)\s*第?\s*(\d{1,3})\s*集", c.title)  # 连载剧中途包：更新至第N集
             eps_total = meta.get("season_eps", {}).get(c.covers[0]) if c.covers else None
             eps_total = eps_total or meta.get("episodes", 0)
             if rng and eps_total >= 4 and int(rng.group(2)) > int(rng.group(1)) and int(rng.group(2)) - int(rng.group(1)) + 1 < eps_total * 0.8:
                 c.score -= 30  # 只有其中几集（如 01-08），排在整包后面
                 partial = f"仅第{rng.group(1)}-{rng.group(2)}集"
+            elif upd:
+                got = int(upd.group(1))
+                if eps_total >= 4 and got < eps_total:
+                    c.score -= 20  # 未完结，只有已播部分；作备选，前面的整包失败时才用
+                    partial = f"更新至第{got}集（未完结，缺 {eps_total - got} 集）"
+                else:  # 播出的集数已齐（如完结后标着更新到20集），不算缺
+                    c.score += 5
         rank = {2160: 2, 1080: 3, 720: 1}.get(res, 0)
         zh = chinese_rank(c.title, meta["names"])
         facts = {"chinese": zh, "year": yr, "quality": rank, "drive": int(cfg.DRIVE_PREFER in ("115", "quark") and c.provider == cfg.DRIVE_PREFER), "keywords": hits, "size": int(bool(per and rules.pref_min <= per <= rules.pref_max)),
