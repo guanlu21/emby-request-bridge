@@ -234,7 +234,9 @@ class Pipeline:
         return ok
 
     async def run_manual(self, rid: int, url: str):
-        await self.run_candidate(rid, url, replace=False)
+        """手动指定资源。已完成（已入库）的请求按「替换」处理：新资源通过筛选后才删旧文件。"""
+        r = db.get(rid)
+        await self.run_candidate(rid, url, replace=bool(r and r["status"] == "done"))
 
     async def run_candidate(self, rid: int, url: str, replace: bool = False):
         """使用指定资源（候选列表里的，或手动粘贴的 115 分享/磁力链接）。

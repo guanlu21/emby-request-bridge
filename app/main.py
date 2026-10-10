@@ -305,7 +305,7 @@ async def replace(rid: int, request: Request, x_token: str = Header("")):
 
 @app.post("/api/requests/{rid}/manual")
 async def manual(rid: int, request: Request, x_token: str = Header("")):
-    """给搜不到的片手动指定 115 分享链接或磁力链接。"""
+    """给搜不到的片手动指定 115/夸克 分享链接或磁力链接；已完成的请求按替换处理。"""
     admin(request, x_token)
     if not db.get(rid):
         raise HTTPException(404)
