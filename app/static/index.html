@@ -405,7 +405,7 @@ async function candDeep(){
   btn.disabled=false;btn.textContent='深度搜索';
 }
 async function manual(id){
-  const url=prompt('粘贴 115 或夸克的分享链接、磁力链接，将跳过搜索直接处理这一条：');
+  const url=prompt('粘贴 115 或夸克的分享链接、磁力链接（可以直接带上提取码，如「链接 提取码：xxxx」），将跳过搜索直接处理这一条：');
   if(!url)return;
   try{await api(`/api/requests/${id}/manual`,{method:'POST',body:{url}});toast('已提交，稍后刷新看进度');setTimeout(loadAdmin,1500)}catch(e){toast(e.message)}
 }
