@@ -189,7 +189,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 </main>
 
 <dialog id="ddlg"><h3 style="margin-top:0">删除选中的请求</h3><p id="dtxt" style="margin:0 0 10px"></p>
-  <label style="align-items:flex-start"><input type="checkbox" id="dpurge" style="margin-top:4px"><span>同时删除 <b>115 网盘里已入库的文件</b><br><small>只删这些请求入库的视频文件，因此变空的片名/季文件夹一并清理；不可恢复（是否进回收站取决于 115）。LitePan 生成的 STRM 文件不会被删，需要在 LitePan 里另行清理。</small></span></label>
+  <label style="align-items:flex-start"><input type="checkbox" id="dpurge" style="margin-top:4px"><span>同时删除 <b>网盘里已入库的文件</b><br><small>只删这些请求入库的视频文件，因此变空的片名/季文件夹一并清理；不可恢复（是否进回收站取决于对应网盘）。LitePan 生成的 STRM 文件不会被删，需要在 LitePan 里另行清理。</small></span></label>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="$('ddlg').close()">取消</button><button class="btn pri" id="dok2" onclick="doDelete()">确认删除</button></div></dialog>
 <dialog id="dlg"><h3 id="dt" style="margin-top:0"></h3><div id="dseasons"></div>
   <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn" onclick="dlg.close()">取消</button><button class="btn pri" id="dok">确认求片</button></div></dialog>
@@ -438,7 +438,7 @@ async function batch(action){
 }
 async function doDelete(){
   const purge=$('dpurge').checked;
-  if(purge&&!confirm('将同时删除 115 网盘里这些请求入库的文件，不可恢复。确定？'))return;
+  if(purge&&!confirm('将同时删除网盘里这些请求入库的文件，不可恢复。确定？'))return;
   $('dok2').disabled=true;
   try{const r=await api('/api/requests/batch',{method:'POST',body:{action:'delete',ids:[...sel],purge}});
     $('ddlg').close();toast(`已删除 ${r.done.length} 条记录`+(purge?`，网盘文件 ${r.purged} 个`:''));sel.clear();$('all').checked=false;loadAdmin()}
