@@ -87,6 +87,7 @@ class _Env:
     MAX_ATTEMPTS = _i("MAX_ATTEMPTS", 8)
     OFFLINE_TIMEOUT = _i("OFFLINE_TIMEOUT_SECONDS", 600)
     POLL_SECONDS = _i("POLL_SECONDS", 20)
+    MAX_CONCURRENT = _i("MAX_CONCURRENT", 3)  # 批量求片最多同时处理的任务数，其余按提交顺序排队
 
 
 class _Cfg:
