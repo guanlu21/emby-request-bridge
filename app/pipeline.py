@@ -501,10 +501,11 @@ class Pipeline:
                 await fn(f["id"], new)
                 f["name"] = new
                 done += 1
-                for s in (sub_map or {}).get(f["id"], []):  # 字幕沿用视频新名 + 原字幕后缀：20.chs.srt -> 新名.chs.srt
-                    stem, _, ext = s["name"].partition(".")
-                    tail = s["name"][len(stem):]  # 保留 .chs.srt 这类语言标记
-                    sname = new.rsplit(".", 1)[0] + tail
+                for s in (sub_map or {}).get(f["id"], []):  # 字幕名与视频名完全一致，只保留字幕自己的扩展名：新名.chs.srt -> 新名.srt
+                    ext = "." + s["name"].rsplit(".", 1)[-1]  # .srt / .ass 等原扩展名
+                    sname = new.rsplit(".", 1)[0] + ext
+                    if sname == s["name"]:
+                        continue
                     try:
                         await fn(s["id"], sname)
                         s["name"] = sname
@@ -618,9 +619,23 @@ class Pipeline:
                     for s in sub_map.get(f["id"], []):
                         ids.append(s["id"])
                         nsub += 1
+                # 常见字幕格式的文件一律保留：没配上视频的字幕也不丢。
+                # 只有 1 个保留视频时（电影场景），未配对字幕并入该视频一起按新名改名；
+                # 多个视频时不乱配，按原文件名原样移入正式目录。
+                if sub_orphan and len(fl) == 1:
+                    sub_map.setdefault(fl[0]["id"], []).extend(sub_orphan)
+                    db.log(xid, f"{len(sub_orphan)} 个字幕文件名没对上视频，按视频名一起改名入库")
+                    sub_orphan = []
+                n_orphan = 0
+                if sub_orphan:
+                    for s in sub_orphan:
+                        ids.append(s["id"])
+                        n_orphan += 1
                 await drive.move(ids, dest)
                 if nsub:
                     db.log(xid, f"随视频一起入库 {nsub} 个字幕文件")
+                if n_orphan:
+                    db.log(xid, f"另有 {n_orphan} 个字幕文件名没对上视频，已原样保留入库（可手动改名对应）")
                 files = [str(f["id"]) for f in fl]  # placed 里只记视频，purge/替换按视频清理
                 extra = {}  # 跨网盘追加时旧网盘的文件 ID（provider -> [id]），删除时用对应网盘的接口
                 if have is not None:  # 追加模式：合并旧 placed，purge/替换时能整体删干净。

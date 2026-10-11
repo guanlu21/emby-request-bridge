@@ -46,9 +46,16 @@ def is_sub(name: str) -> bool:
     return any(n.endswith(e) for e in SUB_EXT)
 
 
+def _stem(name: str) -> str:
+    """去扩展名后的主名（只切一次最后的点）。"""
+    i = name.rfind(".")
+    return name[:i] if i > 0 else name
+
+
 def pair_subs(files: list[dict], keep: list[dict]):
     """把字幕文件配给同集数的保留视频。返回 ({视频id: [字幕,...]}, 没配上视频的字幕)。
     按文件名里的集号配对（20.mp4 ↔ 20.chs.srt、S01E20.mkv ↔ S01E20.ass 都能配上）；
+    电影没有集号，退回按文件名主名配对（abc.mkv ↔ abc.chs.srt、abc.zh.ass 都能配上）；
     同一集有多个字幕（如简体+繁体）都保留。"""
     subs = [f for f in files if is_sub(f["name"])]
     if not subs:
@@ -58,12 +65,28 @@ def pair_subs(files: list[dict], keep: list[dict]):
         e = classify.episode_of(f["name"])
         if e is not None:
             eps.setdefault(e, []).append(f)
+    stems = {}  # 视频主名(小写) -> 视频文件；电影字幕按主名配
+    for f in keep:
+        stems.setdefault(_stem(f["name"]).lower(), []).append(f)
     out, orphan = {}, []
     for s in subs:
         e = classify.episode_of(s["name"])
         match = eps.get(e) if e is not None else None
         if match and len(match) == 1:  # 一集多个同名视频版本时不乱配，留作未配
             out.setdefault(match[0]["id"], []).append(s)
+            continue
+        # 电影/无集号：字幕主名 == 视频主名，或视频主名是字幕主名的前缀（abc.mkv ↔ abc.chs.srt）
+        st = _stem(s["name"]).lower()
+        cand = None
+        if st in stems and len(stems[st]) == 1:
+            cand = stems[st][0]
+        else:
+            for vst, fs in stems.items():
+                if len(fs) == 1 and st.startswith(vst) and len(st) > len(vst):
+                    cand = fs[0]
+                    break
+        if cand is not None:
+            out.setdefault(cand["id"], []).append(s)
         else:
             orphan.append(s)
     return out, orphan
