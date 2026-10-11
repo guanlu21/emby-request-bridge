@@ -32,6 +32,39 @@ def cand_from(d: dict) -> Candidate:
                      tags=d.get("tags", []))
 
 
+def _norm_name(s) -> str:
+    """名称归一化：去年份、标点、空白后小写，用于候选标题与请求中文名的吻合比对。"""
+    import re as _re
+    s = str(s or "")
+    s = _re.sub(r"[\(\[（【]\s*(19|20)\d{2}\s*[\)\]）】]?\s*$", "", s)  # 去结尾年份
+    s = _re.sub(r"\b(19|20)\d{2}\b", "", s)  # 去中间年份
+    s = _re.sub(r"[\s._\-·|:,，。/\\()\[\]（）【】'\"!！?？]+", "", s)
+    return s.lower()
+
+
+def _name_variants(r, meta) -> list:
+    """参与吻合比对的名字集合：请求的中文名 + meta 里能拿到的别名/译名。"""
+    names = []
+    try:
+        names.append(r["title"])
+    except (KeyError, IndexError, TypeError):
+        pass
+    if isinstance(meta, dict):
+        for k in ("cn", "cn_name", "zh_title", "aliases", "aka", "titles", "name_cn"):
+            v = meta.get(k)
+            if isinstance(v, str) and v:
+                names.append(v)
+            elif isinstance(v, (list, tuple)):
+                names.extend(x for x in v if isinstance(x, str))
+    out, seen = [], set()
+    for n in names:
+        n = _norm_name(n)
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def rules() -> Rules:
     return Rules(cfg.MIN_RES, cfg.MIN_GB * 1024 ** 3, cfg.MAX_GB * 1024 ** 3,
                  cfg.PREFER_MIN_GB * 1024 ** 3, cfg.PREFER_MAX_GB * 1024 ** 3, cfg.KEEP_MIN_MB * 1024 ** 2)
@@ -101,6 +134,18 @@ class Pipeline:
         raw, notes = res if isinstance(res, tuple) else (res, [])
         report = {}
         built = build_candidates(raw, meta, r["media_type"], seasons, rules(), report)
+        # 中文名称强校验：候选标题必须吻合请求的中文名（或别名），否则直接打进「被过滤的资源」
+        want = _name_variants(r, meta)
+        if want:
+            keep = []
+            for c in built:
+                t = _norm_name(c.title)
+                if any(n in t for n in want):
+                    keep.append(c)
+                else:
+                    report["counts"]["中文名不吻合"] = report["counts"].get("中文名不吻合", 0) + 1
+                    report.setdefault("samples", []).append("中文名不吻合: " + c.title[:60])
+            built = keep
         return raw, built, report, notes
 
     def _save_cands(self, rows, built, report):
@@ -245,6 +290,9 @@ class Pipeline:
     async def run_manual(self, rid: int, url: str, append: bool = False):
         """手动指定资源。已完成（已入库）的请求：append=True 按追加集数处理（只补新集，失败恢复已完成），否则按「替换」处理。"""
         r = db.get(rid)
+        # 追加集数只对电视剧有意义；电影（同一个视频换资源）一律按「替换」处理
+        if not (r and r["media_type"] == "tv"):
+            append = False
         await self.run_candidate(rid, url, replace=bool(r and r["status"] == "done" and not append), append=append)
 
     async def _eps_in_library(self, rid: int) -> dict:
