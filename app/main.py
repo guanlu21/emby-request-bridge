@@ -134,6 +134,16 @@ async def annotate(items: list[dict], limit: int = 80):
             return
         async with sem:
             it["in_library"] = await emby.has_item(it["type"], it["id"])
+            if it["type"] == "tv" and it["in_library"]:
+                have = set(await emby.series_seasons(it["id"]))
+                try:
+                    info = await tmdb.tv_seasons(it["id"])
+                    total = {x["season"] for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
+                except Exception:  # noqa
+                    total = set()
+                it["missing_seasons"] = sorted(total - have) if total else []
+                # 库里查不到季列表（total 或 have 为空）时按"有缺"处理，保留补季入口
+                it["lib_seasons"] = sorted(have)
         it["requested"] = db.status_of(it["type"], it["id"])
 
     await asyncio.gather(*[one(it) for it in items[:limit]])

@@ -49,3 +49,26 @@ async def has_item(media_type: str, tmdb_id: int) -> bool:
                    for i in r.json().get("Items", []))
     except Exception:  # noqa
         return False
+
+async def series_seasons(tmdb_id: int) -> list:
+    """库里这部剧（按 TMDB ID 比对）的季号列表；查询失败或没配 Emby 时返回 []（按"缺季"处理，保留补季入口）。"""
+    if not (cfg.EMBY_URL and cfg.EMBY_KEY):
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                "api_key": cfg.EMBY_KEY, "Recursive": "true", "Limit": 5, "Fields": "ProviderIds",
+                "IncludeItemTypes": "Series",
+                "AnyProviderIdEquals": f"tmdb.{tmdb_id}"})
+            items = r.json().get("Items", [])
+            if not items:
+                return []
+            sid = items[0]["Id"]
+            r2 = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                "api_key": cfg.EMBY_KEY, "ParentId": sid,
+                "IncludeItemTypes": "Season", "Fields": "IndexNumber"})
+            seasons = [x.get("IndexNumber") for x in r2.json().get("Items", [])
+                       if x.get("IndexNumber")]
+            return sorted(set(seasons))
+    except Exception:  # noqa
+        return []
