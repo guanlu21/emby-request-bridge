@@ -280,7 +280,7 @@ function renderGrid(){
     else if(st=='pending'){label='待审批';dis=true}
     else if(BUSY.includes(st)){label='处理中';dis=true}
     else if(st=='done'&&x.type=='movie'){label='已完成';dis=true}
-    else if(x.type=='tv'&&x.in_library)label='补季求片';
+    else if(x.type=='tv'&&x.in_library)label=(x.missing_seasons&&x.missing_seasons.length?'补季求片':'已入库'),dis=!(x.missing_seasons&&x.missing_seasons.length);
     const sub=[x.year,x.job,x.role].filter(Boolean).join(' · ')||(x.rating?'评分 '+x.rating:'');
     return `<div class="card"><div class="poster">${x.poster?`<img loading="lazy" src="/img/w342/${esc(x.poster.slice(1))}" alt="">`:''}<span class="tag">${x.type=='movie'?'电影':'剧集'}</span></div>
     <h4>${esc(x.title)}</h4><small>${esc(sub)}</small>
