@@ -41,6 +41,7 @@ class Pipeline:
     def __init__(self, drive, meta_fn, search_fn, after_fn, poll=None, quark=None):
         self._dest_lock = asyncio.Lock()
         self._active = set()
+        self._slots = asyncio.Semaphore(cfg.MAX_CONCURRENT)  # 批量求片最多同时处理 N 个，其余按顺序排队
         self.drive, self.meta_fn, self.search_fn, self.after_fn = drive, meta_fn, search_fn, after_fn
         self.quark = quark  # 夸克驱动（可选）
         self.poll = cfg.POLL_SECONDS if poll is None else poll
@@ -70,9 +71,11 @@ class Pipeline:
             return
         self._active.update(ids)
         token = sources.DEPTH.set(depth) if depth else None
+        await self._slots.acquire()  # 并发名额满了就在这里排队等（按提交顺序唤醒）
         try:
             await self._run_rows(rows, append=append)
         finally:
+            self._slots.release()
             self._active.difference_update(ids)
             if token is not None:
                 sources.DEPTH.reset(token)
