@@ -372,6 +372,12 @@ class Pipeline:
         """替换成功前删除旧资源的文件；失败只记日志（可能留下重复文件，需要手动清理）。"""
         op = old.get("provider", "115")
         drive = self._drive(op)
+        for p, ids in (old.get("extra") or {}).items():  # 跨网盘替换/追加时散落在其他网盘的旧文件，用对应网盘的接口删
+            try:
+                await self._drive(p).delete(ids)
+                db.log(rid, f"已删除旧资源在 {'夸克' if p == 'quark' else p} 里的 {len(ids)} 个文件")
+            except Exception as e:  # noqa
+                db.log(rid, f"删除旧资源在 {p} 里的文件失败（请到网盘手动清理）：{e}")
         try:
             await drive.delete(old["files"])
             db.log(rid, f"已删除旧资源的 {len(old['files'])} 个文件")
@@ -406,6 +412,16 @@ class Pipeline:
         provider = placed.get("provider", "115")
         drive = self._drive(provider)
         await drive.delete(placed["files"])
+        n = len(placed["files"])
+        for p, ids in (placed.get("extra") or {}).items():  # 跨网盘替换/追加时散落在其他网盘的旧文件，用对应网盘的接口删
+            if not ids:
+                continue
+            try:
+                await self._drive(p).delete(ids)
+                n += len(ids)
+                db.log(r["id"], f"已删除 {'夸克' if p == 'quark' else p} 网盘里的 {len(ids)} 个旧文件")
+            except Exception as e:  # noqa
+                db.log(r["id"], f"删除 {p} 网盘旧文件失败（请到网盘手动清理）：{e}")
         for cid in reversed(placed.get("chain") or [placed["dest"]]):  # 从最里层往上，空了才删
             if await self._is_empty(cid, drive, provider):
                 try:
@@ -416,7 +432,7 @@ class Pipeline:
                 break
         db.update(r["id"], placed="")
         db.log(r["id"], f"已删除{'夸克' if provider == 'quark' else '115'}网盘里的 {len(placed['files'])} 个文件")
-        return len(placed["files"])
+        return n
 
     async def rename_files(self, rid, files, r, meta, hint="", drive=None, sub_map=None):
         """按命名模板改名（带 TMDB 编号等）；字幕跟着对应视频一起改（Emby 才能挂上字幕）。
@@ -555,13 +571,19 @@ class Pipeline:
                 if nsub:
                     db.log(xid, f"随视频一起入库 {nsub} 个字幕文件")
                 files = [str(f["id"]) for f in fl]  # placed 里只记视频，purge/替换按视频清理
-                if have is not None:  # 追加模式：placed 里合并旧文件的记录，purge/替换时能整体删干净
+                extra = {}  # 跨网盘追加时旧网盘的文件 ID（provider -> [id]），删除时用对应网盘的接口
+                if have is not None:  # 追加模式：合并旧 placed，purge/替换时能整体删干净。
+                    # 旧文件在别的网盘时记到 extra，不能用新网盘的接口删别的网盘的 ID（会报「资源不存在」）
                     try:
                         oldp = json.loads(db.get(xid)["placed"] or "null") or {}
-                        files = sorted(set(oldp.get("files") or []) | set(files), key=lambda v: int(v))
+                        extra = dict(oldp.get("extra") or {})
+                        if oldp.get("provider") and oldp.get("provider") != provider:
+                            extra.setdefault(str(oldp["provider"]), []).extend(str(i) for i in (oldp.get("files") or []))
+                        else:
+                            files = sorted(set(oldp.get("files") or []) | set(files), key=lambda v: int(v))
                     except (ValueError, TypeError):
                         pass
-                db.update(xid, placed=json.dumps({"dest": str(dest), "files": files, "provider": provider,
+                db.update(xid, placed=json.dumps({"dest": str(dest), "files": files, "provider": provider, "extra": extra,
                                                   "chain": [str(ch) for ch in x.pop("_chain", [dest])]}))
                 placed.add(x["season"])
             return placed

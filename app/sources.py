@@ -141,9 +141,9 @@ async def search_pansou(c: httpx.AsyncClient, kw: str, refresh: bool = False) ->
     for it in data.get("quark", []):
         if quark.parse_quark_share(it.get("url", ""), it.get("password", "")):
             out.append(Candidate("share", it.get("note", ""), it["url"], it.get("password", ""), src="pansou", provider="quark"))
-    for it in data.get("magnet", []):
-        if str(it.get("url", "")).startswith("magnet:"):
-            out.append(Candidate("magnet", it.get("note", ""), it["url"], src="pansou"))
+    # pansou 的 magnet 分组已整体跳过：它的磁力标题不带体积，
+    # 体积预判不出来就得拒（115 下载有额度，不能下载到网盘里才发现体积不对）；
+    # 带体积的磁力来源（KiteSearch/纸鸢/磁力站/电影港/BitSearch）已经够用。
     return out
 
 
@@ -318,7 +318,13 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
         if why:
             reject(c, why); continue
         per = 0
-        if c.kind == "magnet" and c.size:
+        if not c.size:  # 没带体积的先从标题里预判（3.1G / 1080p 字样附近），预判不出来且是磁力就直接拒绝
+            m = re.search(r"(\d+(?:\.\d+)?)\s*([GT])B?", c.title, re.I)
+            if m:
+                c.size = float(m.group(1)) * (1024 ** 4 if m.group(2).upper() == "T" else 1024 ** 3)
+        if c.kind == "magnet" and not c.size:
+            reject(c, "体积未知"); continue  # 115 下载有额度，不允许下载到网盘里再判断体积
+        if c.size:
             sp = season_span(c.title)
             multi = bool(sp and sp[0] != sp[1])
             eps = meta.get("season_eps", {}).get(c.covers[0]) if c.covers else None
@@ -330,7 +336,7 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
         hits = len([g for g in parse_terms(cfg.KW_PREFER) if g and any(a in text.lower() for a in g)])
         c.score = score(c.title, c.seeders, c.kind == "share", per, rules) + kw_bonus(text, cfg.KW_PREFER) + {2: 12, 1: 6}.get(yr, 0)
         if media_type == "movie" and not _years(c.title):
-            c.score -= 15  # 没写年份：不丢弃，但排在写了年份的后面
+            reject(c, "标题没有年份"); continue  # 时间严格匹配：电影标题里没有年份就不进候选
         partial = ""
         if media_type == "tv":
             if re.search(r"全集|合集|打包|完结|全\s*\d+\s*集|(?i:complete)", c.title):
@@ -351,7 +357,9 @@ def build_candidates(raw: list[Candidate], meta: dict, media_type: str, season, 
                     c.score += 5
         rank = {2160: 2, 1080: 3, 720: 1}.get(res, 0)
         zh = chinese_rank(c.title, meta["names"])
-        facts = {"chinese": zh, "year": yr, "quality": rank, "drive": int(cfg.DRIVE_PREFER in ("115", "quark") and c.provider == cfg.DRIVE_PREFER), "keywords": hits, "size": int(bool(per and rules.pref_min <= per <= rules.pref_max)),
+        # 网盘偏好：没配置 DRIVE_PREFER 时自动选——连载剧集优先夸克（不占 115 下载额度），电影等其他优先 115
+        prefer = cfg.DRIVE_PREFER if cfg.DRIVE_PREFER in ("115", "quark") else ("quark" if media_type == "tv" else "115")
+        facts = {"chinese": zh, "year": yr, "quality": rank, "drive": int(c.provider == prefer), "keywords": hits, "size": int(bool(per and rules.pref_min <= per <= rules.pref_max)),
                  "source": int(c.kind == "share"), "seeders": min(c.seeders, 50)}
         c._key = priority_tuple(cfg.PRIORITY, facts)
         c.tags = _tags(c, meta, res, per, rules, yr, hits) + ([f"覆盖第{'/'.join(map(str, c.covers))}季"] if media_type == "tv" else []) \
