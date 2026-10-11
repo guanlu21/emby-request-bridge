@@ -1,4 +1,5 @@
 """资源筛选与打分：分辨率、体积、视频类型、标题/季匹配。纯函数，便于测试。"""
+from . import classify  # 修复：筛选文件时需要 episode_of 等函数
 import re
 from dataclasses import dataclass
 
