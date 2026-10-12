@@ -575,7 +575,11 @@ class Pipeline:
                     keep = [best]
                 plan = [(r0, keep)]
             else:
-                by = assign_seasons(keep, [x["season"] for x in rows], c.title)
+                if manual:  # 手动指定不判断季，所有文件直接归这个请求
+                    by = {x["season"]: keep for x in rows}
+                    self._log_all(rows, f"手动指定：不做季判断，{len(keep)} 个视频全部归入当前请求")
+                else:
+                    by = assign_seasons(keep, [x["season"] for x in rows], c.title)
                 if not by:
                     raise RuntimeError("无法判断这些文件属于哪一季（文件名和文件夹名里都没有季信息）")
                 for x in rows:
