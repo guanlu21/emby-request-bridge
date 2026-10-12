@@ -293,7 +293,7 @@ async function tvUpdate(i){
   if(x.missing_seasons&&x.missing_seasons.length)parts.push('缺少第 '+x.missing_seasons.join('、')+' 季');
   if(x.missing_eps>0)parts.push('缺少约 '+x.missing_eps+' 集');
   if(!confirm('确定要补齐 '+x.title+' 吗？\n'+parts.join('；')+'\n缺季将新建求片，缺集将自动追加搜索。'))return;
-  try{await api('/api/tv/'+x.id+'/update',{method:'POST',body:JSON.stringify({title:x.title,year:x.year})});toast('已提交：缺季新建求片、缺集自动追加搜索');renderGrid()}catch(e){toast(e.message)}
+  try{await api('/api/tv/'+x.id+'/update',{method:'POST',body:{title:x.title,year:x.year}});toast('已提交：缺季新建求片、缺集自动追加搜索');renderGrid()}catch(e){toast(e.message)}
 }
 async function search(){
   const q=$('q').value.trim();if(!q)return;
