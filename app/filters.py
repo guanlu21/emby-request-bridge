@@ -234,6 +234,33 @@ def single_episode_only(title: str) -> bool:
     return bool(SINGLE_EP.search(title)) and not PACK_LOOSE.search(title) and not re.search(r"(?<![第\d])\d+\s*集", title)
 
 
+UPD_RE = re.compile(r"更新(?:至|到|至第|到第)?\s*(\d{1,3})\s*集|连载至\s*(\d{1,3})\s*集")
+EP_RANGE_RE = re.compile(r"(?i)(?:E|EP|第)\s*(\d{1,3})\s*[-~至到]\s*(?:E|EP|第)?\s*(\d{1,3})\s*集(?!\d)|(?<![.\d])(\d{2})\s*[-~]\s*(\d{2})(?!\d)(?!\s*季)")
+E_RANGE_RE = re.compile(r"(?i)(?<![a-z])E(?:P)?\s*(\d{1,3})\s*[-~至到]\s*E?(?:P)?\s*(\d{1,3})(?!\d)")
+
+
+def title_updated_eps(title: str):
+    """标题里写明的"已更新至 N 集"→ N；没写返回 None。例：喜剧之王 4K [更新至16集] → 16。"""
+    m = UPD_RE.search(title or "")
+    if m:
+        return int(m.group(1) or m.group(2))
+    return None
+
+
+def title_ep_range(title: str):
+    """标题里的集数范围："第01-08集"/"E01-08"/"01-08" → (1, 8)；没写返回 None。
+    不匹配季范围（第1-3季不算）、年份（4 位数不算）和分辨率数字。"""
+    m = EP_RANGE_RE.search(title or "")
+    if not m:
+        m = E_RANGE_RE.search(title or "")
+    if m:
+        a, b = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+        a, b = int(a), int(b)
+        if 0 < a <= b <= 999 and not (1900 <= a <= 2100 and 1900 <= b <= 2100):
+            return a, b
+    return None
+
+
 _SEASON_PATS = [re.compile(r"(?i)S(\d{1,2})[ ._-]*E\d"), re.compile(r"(?i)(?<![a-z])Season[ ._-]*(\d{1,2})"),
                 re.compile(rf"第\s*({_NUM})\s*季"), re.compile(r"(?i)(?<![a-z0-9])S(\d{1,2})(?![a-z0-9])")]
 

@@ -10,7 +10,7 @@ from .config import cfg
 from . import classify
 import math
 
-from .filters import Rules, assign_seasons, explain_files, is_video, pair_subs, pick_best_file, select_files
+from .filters import Rules, assign_seasons, explain_files, is_video, pair_subs, pick_best_file, select_files, title_ep_range, title_updated_eps
 from . import sources
 from . import quark as quark_mod
 from .sources import Candidate, build_candidates, parse_115_share, share_provider, split_manual_url
@@ -126,7 +126,7 @@ class Pipeline:
         r["seasons"] = [x["season"] for x in rows if x["season"]]
         return await self.meta_fn(r)
 
-    async def _search_build(self, rows, meta):
+    async def _search_build(self, rows, meta, append: dict = None):
         """搜索 + 过滤 + 排序（电视剧一次搜，按覆盖的季数优先）。返回 (原始结果, 候选, 过滤报告, 说明)。"""
         r = rows[0]
         seasons = [x["season"] for x in rows] if r["media_type"] == "tv" else None
@@ -146,6 +146,21 @@ class Pipeline:
                     report["counts"]["中文名不吻合"] = report["counts"].get("中文名不吻合", 0) + 1
                     report.setdefault("samples", []).append("中文名不吻合: " + c.title[:60])
             built = keep
+        # 追加模式下载前预判：标题里写明「更新至 N 集」没超过库里已有的、或集数范围完全在库里
+        # 已有的（如 仅第01-08集 而库里有 14 集），直接过滤，不浪费下载
+        if append and r["media_type"] == "tv" and built:
+            keep_a = []
+            for cand in built:
+                covers = cand.covers or set(append.keys())
+                lib_n = max((len(append[s]) for s in covers if s in append), default=0)
+                upd = title_updated_eps(cand.title)
+                rng = title_ep_range(cand.title)
+                if (upd is not None and upd <= lib_n) or (rng is not None and rng[1] <= lib_n):
+                    report["counts"]["追集无新集"] = report["counts"].get("追集无新集", 0) + 1
+                    report.setdefault("samples", []).append(f"追集无新集（库里有 {lib_n} 集）: " + cand.title[:60])
+                else:
+                    keep_a.append(cand)
+            built = keep_a
         return raw, built, report, notes
 
     def _save_cands(self, rows, built, report):
@@ -164,7 +179,7 @@ class Pipeline:
             for x in rows:
                 db.update(x["id"], status="searching", error="")
             meta = await self._meta_for(rows)
-            raw, built, report, notes = await self._search_build(rows, meta)
+            raw, built, report, notes = await self._search_build(rows, meta, append=append)
             for n in notes:
                 self._log_all(rows, f"提示：{n}")
             tried = set(json.loads(r["tried"]))
@@ -560,7 +575,11 @@ class Pipeline:
                 keep = [f for f in listing if is_video(f["name"])]
                 drop = [f for f in listing if not is_video(f["name"])]
             else:
-                keep, drop = select_files(listing, rules())
+                rl = rules()
+                if getattr(c, "src", "") == "pansou":  # pansou 分享不限分辨率（4K/1080p 都收），只按名称和时间匹配
+                    from dataclasses import replace as _dc_replace
+                    rl = _dc_replace(rl, min_res=0)
+                keep, drop = select_files(listing, rl)
             sub_map, sub_orphan = pair_subs(listing, keep)  # 字幕跟视频一起入库，不能丢
             if not keep:
                 if manual:
