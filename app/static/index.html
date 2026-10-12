@@ -316,7 +316,7 @@ function backPerson(){
 async function ask(i){
   const x=items[i];
   if(x.type=='movie')return send(x,[]);
-  let t;try{t=await api('/api/tv/'+x.id)}catch(e){return toast(e.message)}
+  let t;try{t=await api('/api/tv/'+x.id+'?title='+encodeURIComponent(x.title||''))}catch(e){return toast(e.message)}
   $('dt').textContent=x.title+'：选择要求的季';
   $('dseasons').innerHTML=t.seasons.map(s=>`<label><input type="checkbox" value="${s.season}" checked>${esc(s.name||('第'+s.season+'季'))} <small>${s.episodes} 集</small></label>`).join('');
   $('dok').onclick=()=>{const ss=[...document.querySelectorAll('#dseasons input:checked')].map(c=>+c.value);
