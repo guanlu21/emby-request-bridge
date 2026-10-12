@@ -144,6 +144,14 @@ async def annotate(items: list[dict], limit: int = 80):
                 it["missing_seasons"] = sorted(total - have) if total else []
                 # 库里查不到季列表（total 或 have 为空）时按"有缺"处理，保留补季入口
                 it["lib_seasons"] = sorted(have)
+                # 求更：库内已有的季，逐季对比 TMDB 总集数，缺的集数求更新
+                lib_eps = await emby.series_episode_counts(it["id"])
+                miss = 0
+                for s in have:
+                    tmdb_n = next((x.get("episodes", 0) for x in info.get("seasons", []) if x.get("season") == s), 0) if total else 0
+                    if tmdb_n and lib_eps.get(s, 0) < tmdb_n:
+                        miss += tmdb_n - lib_eps.get(s, 0)
+                it["missing_eps"] = miss
         it["requested"] = db.status_of(it["type"], it["id"])
 
     await asyncio.gather(*[one(it) for it in items[:limit]])
@@ -259,6 +267,59 @@ def retry(rid: int, request: Request, reset: bool = False, x_token: str = Header
         db.update(rid, tried="[]")
     spawn(rid)
     return {"ok": True}
+
+
+@app.post("/api/tv/{tid}/update")
+async def tv_update(tid: int, request: Request, x_token: str = Header("")):
+    """补季 + 求更合并入口：库内剧集缺季就新建求片记录，缺集就对已完成的记录触发追加搜索。"""
+    u = who(request, x_token)
+    b = await request.json()
+    title = f"{b.get('title', '')} ({b.get('year')})" if b.get("year") else b.get("title", "")
+    info = await tmdb.tv_seasons(tid)
+    seasons = {x["season"]: x.get("episodes", 0) for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
+    have = set(await emby.series_seasons(tid))
+    lib_eps = await emby.series_episode_counts(tid)
+    created, appended, dup = [], [], 0
+    # 1) 缺季：新建求片（走原有审批/去重逻辑）
+    miss_seasons = sorted(set(seasons) - have)
+    status = "queued" if (u["admin"] or cfg.APPROVAL == "auto") else "pending"
+    ids = []
+    for s in miss_seasons:
+        rid = db.create("tv", tid, s, title, u["name"], status, u["uid"])
+        if rid:
+            ids.append(rid)
+        else:
+            dup += 1
+    if mt_len := len(ids):
+        if mt_len > 1:
+            for i in ids:
+                db.update(i, grp=ids[0])
+        if status == "queued":
+            for rid in db.leaders(ids):
+                spawn(rid)
+        created = ids
+    # 2) 缺集：对库里已有记录（任意状态非进行中）触发追加；没有记录就为缺集季新建
+    for s in sorted(have):
+        n = seasons.get(s, 0)
+        if not n or lib_eps.get(s, 0) >= n:
+            continue
+        rows = [r for r in db.list_all() if r["tmdb_id"] == tid and r["media_type"] == "tv"
+                and r["season"] == s and r["status"] in ("done", "failed")]
+        if rows:
+            for r in rows:
+                spawn(r["id"], append=True)
+                appended.append(r["id"])
+        else:
+            rid = db.create("tv", tid, s, title, u["name"], status, u["uid"])
+            if rid:
+                ids2 = [rid]
+                db.update(rid, grp=rid)
+                if status == "queued":
+                    spawn(rid)
+                created.append(rid)
+            else:
+                dup += 1
+    return {"created": created, "appended": appended, "duplicates": dup, "status": status}
 
 
 @app.post("/api/requests/{rid}/append")

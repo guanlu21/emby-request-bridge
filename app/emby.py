@@ -35,6 +35,33 @@ async def check(name: str):
     return True, "", u["id"]
 
 
+async def series_episode_counts(tmdb_id: int) -> dict:
+    """库里这部剧每一季的集数 {季号: 已有集数}；查不到返回 {}。用于对比 TMDB 总集数判断是否缺集（求更）。"""
+    if not (cfg.EMBY_URL and cfg.EMBY_KEY):
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                "api_key": cfg.EMBY_KEY, "Recursive": "true", "Limit": 5, "Fields": "ProviderIds",
+                "IncludeItemTypes": "Series",
+                "AnyProviderIdEquals": f"tmdb.{tmdb_id}"})
+            items = r.json().get("Items", [])
+            if not items:
+                return {}
+            sid = items[0]["Id"]
+            r2 = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                "api_key": cfg.EMBY_KEY, "ParentId": sid,
+                "IncludeItemTypes": "Episode", "Fields": "ParentIndexNumber", "Limit": 2000})
+            out = {}
+            for x in r2.json().get("Items", []):
+                sn, ep = x.get("ParentIndexNumber"), x.get("IndexNumber")
+                if sn and ep:
+                    out[sn] = max(out.get(sn, 0), ep)
+            return out
+    except Exception:  # noqa
+        return {}
+
+
 async def has_item(media_type: str, tmdb_id: int) -> bool:
     """库里是否已有这部片（靠 TMDB ID 比对；查询失败按"没有"处理）。"""
     if not (cfg.EMBY_URL and cfg.EMBY_KEY):
