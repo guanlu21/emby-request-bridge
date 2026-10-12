@@ -49,12 +49,23 @@ async def series_episode_counts(tmdb_id: int) -> dict:
             if not items:
                 return {}
             sid = items[0]["Id"]
-            r2 = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
-                "api_key": cfg.EMBY_KEY, "ParentId": sid,
-                "IncludeItemTypes": "Episode", "Fields": "ParentIndexNumber", "Limit": 2000})
             out = {}
-            for x in r2.json().get("Items", []):
+            # 首选 /Shows/{id}/Episodes（标准端点，带季号集号）；失败再回退 ParentId 查询
+            try:
+                r2 = await c.get(f"{cfg.EMBY_URL}/emby/Shows/{sid}/Episodes", params={
+                    "api_key": cfg.EMBY_KEY, "Limit": 2000})
+                eps = r2.json().get("Items", [])
+            except Exception:  # noqa
+                eps = []
+            if not eps:
+                r2 = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                    "api_key": cfg.EMBY_KEY, "ParentId": sid,
+                    "IncludeItemTypes": "Episode", "Fields": "ParentIndexNumber", "Limit": 2000})
+                eps = r2.json().get("Items", [])
+            for x in eps:
                 sn, ep = x.get("ParentIndexNumber"), x.get("IndexNumber")
+                if not sn:
+                    sn = (x.get("SeriesName") and x.get("SeasonName") and 1) or 1  # 无季号时按第 1 季
                 if sn and ep:
                     out[sn] = max(out.get(sn, 0), ep)
             return out

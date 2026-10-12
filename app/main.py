@@ -140,7 +140,7 @@ async def annotate(items: list[dict], limit: int = 80):
                     info = await tmdb.tv_seasons(it["id"])
                     total = {x["season"] for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
                 except Exception:  # noqa
-                    total = set()
+                    info, total = {}, set()
                 it["missing_seasons"] = sorted(total - have) if total else []
                 # 库里查不到季列表（total 或 have 为空）时按"有缺"处理，保留补季入口
                 it["lib_seasons"] = sorted(have)
@@ -229,7 +229,11 @@ async def make_request(request: Request, x_token: str = Header("")):
 @app.get("/api/requests")
 def list_requests(request: Request, user: str = "", x_token: str = Header("")):
     u = who(request, x_token)
-    return db.list_all(user if u["admin"] else u["name"])
+    rows = db.list_all(user if u["admin"] else u["name"])
+    q = (request.query_params.get("q") or "").strip().lower()
+    if q:  # 片名模糊搜索：管理页影片多时快速定位
+        rows = [r for r in rows if q in (r["title"] or "").lower()]
+    return rows
 
 
 # ---------- 管理 ----------
@@ -275,7 +279,11 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
     u = who(request, x_token)
     b = await request.json()
     title = f"{b.get('title', '')} ({b.get('year')})" if b.get("year") else b.get("title", "")
-    info = await tmdb.tv_seasons(tid)
+    try:
+        info = await tmdb.tv_seasons(tid)
+    except Exception as ex:  # TMDB 网络失败不应 500，按无信息处理
+        info = {}
+        import logging; logging.getLogger("uvicorn.error").warning(f"tv_update tmdb 失败 tid={tid}: {ex}")
     seasons = {x["season"]: x.get("episodes", 0) for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
     have = set(await emby.series_seasons(tid))
     lib_eps = await emby.series_episode_counts(tid)
