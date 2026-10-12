@@ -226,7 +226,7 @@ function times(x){
 }
 const pill=s=>`<span class="pill s-${s}">${NAME[s]||s}</span>`;
 let me=null,items=[],data=[],sel=new Set(),timer=null;
-const OPEN=new Set(),LASTSIG={admin:''};   // OPEN：展开着的日志（请求 id），刷新列表时保持展开
+const OPEN=new Set(),LASTSIG={admin:'',mine:''};   // OPEN：展开着的日志（请求 id），刷新列表时保持展开
 function toggleLog(id,open){open?OPEN.add(id):OPEN.delete(id)}
 
 async function api(path,opt={}){
@@ -334,13 +334,20 @@ async function send(x,seasons){
 
 
 
+function logtxt(x){try{const a=JSON.parse(x.log||'[]');return Array.isArray(a)?a.join('\n'):String(x.log||'')}catch(e){return ''}}
+
 /* ---- 我的请求 ---- */
 async function loadMine(){
+  try{
   const d=await api('/api/requests');
+  const sig=JSON.stringify(d);
+  if(sig===LASTSIG.mine)return;
+  LASTSIG.mine=sig;
   $('mempty').classList.toggle('hide',d.length>0);
   $('mine').innerHTML=d.map(x=>`<tr><td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}</td>
     <td data-l="时间">${times(x)}</td>
     <td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td></tr>`).join('');
+  }catch(e){toast('加载我的请求失败：'+e.message)}
 }
 
 /* ---- 管理 ---- */
@@ -360,7 +367,7 @@ function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
   window.DONE_IDS=new Set(d.filter(x=>x.status==='done').map(x=>x.id));
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
-  <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(JSON.parse(x.log).join('\n'))}</pre></details></td>
+  <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(logtxt(x))}</pre></details></td>
   <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
   <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['done','failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
 }
