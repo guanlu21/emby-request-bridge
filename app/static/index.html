@@ -276,7 +276,7 @@ function renderPeople(){
 function renderGrid(){
   $('sempty').classList.toggle('hide',items.length>0||PEOPLE.length>0);
   $('grid').innerHTML=items.map((x,i)=>{
-    const st=x.requested;let label='求片',dis=false;
+    const st=x.requested;let label='求片',dis=false,upd=false;
     if(x.type=='movie'&&x.in_library){label='已入库';dis=true}
     else if(st=='pending'){label='待审批';dis=true}
     else if(BUSY.includes(st)){label='处理中';dis=true}
