@@ -146,21 +146,25 @@ class Pipeline:
                     report["counts"]["中文名不吻合"] = report["counts"].get("中文名不吻合", 0) + 1
                     report.setdefault("samples", []).append("中文名不吻合: " + c.title[:60])
             built = keep
-        # 追加模式下载前预判：标题里写明「更新至 N 集」没超过库里已有的、或集数范围完全在库里
-        # 已有的（如 仅第01-08集 而库里有 14 集），直接过滤，不浪费下载
-        if append and r["media_type"] == "tv" and built:
-            keep_a = []
-            for cand in built:
-                covers = cand.covers or set(append.keys())
-                lib_n = max((len(append[s]) for s in covers if s in append), default=0)
-                upd = title_updated_eps(cand.title)
-                rng = title_ep_range(cand.title)
-                if (upd is not None and upd <= lib_n) or (rng is not None and rng[1] <= lib_n):
-                    report["counts"]["追集无新集"] = report["counts"].get("追集无新集", 0) + 1
-                    report.setdefault("samples", []).append(f"追集无新集（库里有 {lib_n} 集）: " + cand.title[:60])
-                else:
-                    keep_a.append(cand)
-            built = keep_a
+        # 下载前预判（所有 TV 请求，不限追加模式）：标题里写明「更新至 N 集」没超过
+        # 库里已有的、或集数范围完全在库里已有的（如 01-04 而库里有 4 集），直接过滤，不浪费下载。
+        # 普通流程没传 append 时，现场查一次库内已有集数；查不到（未入库）就跳过预判。
+        if r["media_type"] == "tv" and built:
+            if append is None:
+                append = await self._eps_in_library(r["id"])
+            if append:
+                keep_a = []
+                for cand in built:
+                    covers = cand.covers or set(append.keys())
+                    lib_n = max((len(append[s]) for s in covers if s in append), default=0)
+                    upd = title_updated_eps(cand.title)
+                    rng = title_ep_range(cand.title)
+                    if (upd is not None and upd <= lib_n) or (rng is not None and rng[1] <= lib_n):
+                        report["counts"]["追集无新集"] = report["counts"].get("追集无新集", 0) + 1
+                        report.setdefault("samples", []).append(f"库里有 {lib_n} 集、资源无新集: " + cand.title[:60])
+                    else:
+                        keep_a.append(cand)
+                built = keep_a
         return raw, built, report, notes
 
     def _save_cands(self, rows, built, report):
