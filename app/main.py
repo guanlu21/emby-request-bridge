@@ -53,6 +53,33 @@ app = FastAPI(lifespan=lifespan, title="Emby求片")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception):
+    """把 500 的真实异常打进日志并透出到前端提示，方便定位线上问题。
+    本身必须绝不抛错：格式化失败也要返回 JSON，避免回退成无信息的纯文本 500。"""
+    import logging, traceback as _tb
+    log = logging.getLogger("uvicorn.error")
+    try:
+        detail = f"{type(exc).__name__}: {exc}"
+    except Exception:  # noqa
+        detail = "unknown error"
+    try:
+        if hasattr(_tb, "format_exception"):
+            try:
+                txt = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+            except TypeError:  # Python 3.9- 单参数写法
+                txt = "".join(_tb.format_exception(None, exc, exc.__traceback__))
+        else:
+            txt = repr(exc)
+        log.error(f"500 {request.method} {request.url.path}:\n{txt}")
+    except Exception:  # noqa
+        log.error(f"500 {request.method} {request.url.path}: {detail}")
+    try:
+        return JSONResponse({"detail": detail}, status_code=500)
+    except Exception:  # noqa
+        return Response(f"500 {detail}", status_code=500, media_type="text/plain")
+
+
 def who(request: Request, x_token: str = "") -> dict:
     """登录的 Emby 用户（会话 Cookie），或管理令牌（供脚本 / emby-manager 调用）。"""
     if x_token and hmac.compare_digest(x_token, cfg.TOKEN):
