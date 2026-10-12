@@ -305,6 +305,11 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
     """补季 + 求更合并入口：库内剧集缺季就新建求片记录，缺集就对已完成的记录触发追加搜索。"""
     u = who(request, x_token)
     b = await request.json()
+    if isinstance(b, str):  # 前端可能双重序列化：字符串再解一层
+        import json as _json
+        b = _json.loads(b) if b.strip() else {}
+    if not isinstance(b, dict):
+        b = {}
     title = f"{b.get('title', '')} ({b.get('year')})" if b.get("year") else b.get("title", "")
     try:
         info = await tmdb.tv_seasons(tid)
