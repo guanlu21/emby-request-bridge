@@ -260,10 +260,23 @@ async def make_request(request: Request, x_token: str = Header("")):
 @app.get("/api/requests")
 def list_requests(request: Request, user: str = "", x_token: str = Header("")):
     u = who(request, x_token)
-    rows = db.list_all(user if u["admin"] else u["name"])
+    admin = u["admin"]
+    rows = db.list_all("" if admin else (user or u["name"]))
     q = (request.query_params.get("q") or "").strip().lower()
     if q:  # 片名模糊搜索：管理页影片多时快速定位
         rows = [r for r in rows if q in (r["title"] or "").lower()]
+    # 列表接口瘦身：前端每 6 秒轮询一次，全量日志/已试资源会让响应变成几 MB，
+    # 空闲时也持续耗流量、界面变卡。非管理员不返回日志和 tried；管理员只带日志最后 15 行。
+    for r in rows:
+        if admin:
+            try:
+                lg = json.loads(r.get("log") or "[]")
+                r["log"] = json.dumps(lg[-15:] if isinstance(lg, list) else [], ensure_ascii=False)
+            except Exception:  # noqa
+                r["log"] = "[]"
+        else:
+            r.pop("log", None)
+            r.pop("tried", None)
     return rows
 
 
