@@ -174,6 +174,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
   <div class="bar">
     <select id="flt" onchange="renderAdmin()"><option value="">全部状态</option><option value="pending">待审批</option><option value="active">进行中</option><option value="failed">失败</option><option value="done">已完成</option><option value="rejected">已拒绝</option></select>
     <select id="usr" onchange="renderAdmin()"><option value="">所有用户</option></select>
+    <input id="q" placeholder="片名搜索…" oninput="clearTimeout(window._qt);window._qt=setTimeout(renderAdmin,300)" style="width:140px">
     <button class="btn" onclick="selAll()">全选/取消</button>
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button><button class="btn" onclick="appendEps()" title="连载剧已入库后，只补新更新的集数">追加集数</button>
@@ -352,8 +353,8 @@ async function loadAdmin(){
   renderAdmin();
 }
 function shown(){
-  const f=$('flt').value,u=$('usr').value;
-  return data.filter(x=>(!u||x.requester==u)&&(!f||(f=='active'?BUSY.includes(x.status):x.status==f)));
+  const f=$('flt').value,u=$('usr').value,q=($('q')&&$('q').value||'').trim().toLowerCase();
+  return data.filter(x=>(!u||x.requester==u)&&(!f||(f=='active'?BUSY.includes(x.status):x.status==f))&&(!q||(x.title||'').toLowerCase().includes(q)));
 }
 function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
