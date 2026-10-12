@@ -10,7 +10,7 @@ from .config import cfg
 from . import classify
 import math
 
-from .filters import Rules, assign_seasons, explain_files, pair_subs, pick_best_file, select_files
+from .filters import Rules, assign_seasons, explain_files, is_video, pair_subs, pick_best_file, select_files
 from . import sources
 from . import quark as quark_mod
 from .sources import Candidate, build_candidates, parse_115_share, share_provider, split_manual_url
@@ -555,14 +555,21 @@ class Pipeline:
                         raise RuntimeError("离线下载失败或超时")
                     await asyncio.sleep(self.poll)
             listing = await drive.list_files(stage)
-            keep, drop = select_files(listing, rules())
+            manual = (getattr(c, "src", "") == "manual")  # 手动指定的资源不做任何筛选，所有视频文件都保留
+            if manual:
+                keep = [f for f in listing if is_video(f["name"])]
+                drop = [f for f in listing if not is_video(f["name"])]
+            else:
+                keep, drop = select_files(listing, rules())
             sub_map, sub_orphan = pair_subs(listing, keep)  # 字幕跟视频一起入库，不能丢
             if not keep:
+                if manual:
+                    raise RuntimeError("这个分享/下载里没有任何视频文件")
                 raise RuntimeError("没有符合条件的视频文件（" + explain_files(listing, rules()) + f"；每个视频要在 {cfg.KEEP_MIN_MB:g}MB~{cfg.MAX_GB:g}GB 之间）")
             plan = []  # [(请求, 它的文件)]
             have = None  # 追加模式里该季"库里已有的集号集合"；常规模式恒为 None（电影分支不定义会 NameError）
             if r0["media_type"] == "movie":
-                if len(keep) > 1:  # 一个分享里有多个版本，只留最合适的一个
+                if len(keep) > 1 and not manual:  # 自动链路：一个分享里有多个版本，只留最合适的一个；手动全保留
                     best = pick_best_file(keep, rules())
                     drop += [f for f in keep if f is not best]
                     keep = [best]
@@ -594,8 +601,8 @@ class Pipeline:
                     else:
                         have = None
                         eps = meta.get("season_eps", {}).get(x["season"]) or meta.get("episodes", 0)
-                        need = max(2, math.ceil(eps * cfg.SEASON_RATIO / 100)) if (eps >= 4 and cfg.SEASON_RATIO > 0) else 0
-                        if len(fl) < need:  # 疑似只是单集或残缺的包
+                        need = 0 if manual else (max(2, math.ceil(eps * cfg.SEASON_RATIO / 100)) if (eps >= 4 and cfg.SEASON_RATIO > 0) else 0)
+                        if len(fl) < need:  # 疑似只是单集或残缺的包（手动指定不做此检查）
                             db.log(x["id"], f"第 {x['season']} 季只有 {len(fl)} 个视频，已播出约 {eps} 集，至少要 {need} 个（占比 {cfg.SEASON_RATIO:g}%），疑似不是整季，跳过")
                             continue
                     plan.append((x, fl))
