@@ -213,8 +213,10 @@ async def person(pid: int, request: Request, x_token: str = Header("")):
 
 
 @app.get("/api/tv/{tv_id}")
-async def tv(tv_id: int, request: Request, x_token: str = Header("")):
+async def tv(tv_id: int, request: Request, title: str = "", x_token: str = Header("")):
     who(request, x_token)
+    if title and not await tmdb.tv_title_matches(tv_id, title):
+        raise HTTPException(400, "该 ID 对应的不是这部剧（电影/剧集 ID 撞号），请直接搜索后求片")
     try:
         return await tmdb.tv_seasons(tv_id)
     except Exception as e:  # noqa
@@ -231,6 +233,8 @@ async def make_request(request: Request, x_token: str = Header("")):
     if not u["admin"] and cfg.QUOTA_WEEKLY and db.count_recent(u["name"]) >= cfg.QUOTA_WEEKLY:
         raise HTTPException(429, f"本周求片已达上限（{cfg.QUOTA_WEEKLY} 部）")
     title = f"{b.get('title', '')} ({b.get('year')})" if b.get("year") else b.get("title", "")
+    if mt == "tv" and b.get("title") and not await tmdb.tv_title_matches(tid, b["title"]):
+        raise HTTPException(400, "该 ID 对应的不是这部剧（电影/剧集 ID 撞号），请直接搜索后求片")
     seasons = [None]
     if mt == "tv":
         seasons = [int(s) for s in b.get("seasons", [])]
@@ -310,6 +314,8 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
         b = _json.loads(b) if b.strip() else {}
     if not isinstance(b, dict):
         b = {}
+    if b.get("title") and not await tmdb.tv_title_matches(tid, b["title"]):
+        raise HTTPException(400, "该 ID 对应的不是这部剧（电影/剧集 ID 撞号），请直接搜索后求片")
     title = f"{b.get('title', '')} ({b.get('year')})" if b.get("year") else b.get("title", "")
     try:
         info = await tmdb.tv_seasons(tid)

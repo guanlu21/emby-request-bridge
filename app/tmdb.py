@@ -126,3 +126,20 @@ async def test() -> dict:
         return {"ok": True, "ms": int((time.time() - t) * 1000)}
     except Exception as e:  # noqa
         return {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
+
+
+async def tv_title_matches(tv_id: int, title: str) -> bool:
+    """校验该 TMDB ID 确实是名为 title 的剧集。电影/剧集 ID 是两套独立空间，
+    防止电影 ID 撞上剧集 ID 被误当剧集处理（查不到 TMDB 时放行，保持原行为）。"""
+    if not (title or "").strip():
+        return True
+    try:
+        d = await get(f"/tv/{tv_id}")
+    except Exception:  # noqa
+        return True
+
+    def _n(s):
+        return re.sub(r"[\s\W_]+", "", (s or "").lower())
+
+    a, b = _n(title), _n(d.get("name") or d.get("original_name") or "")
+    return bool(a and b) and (a in b or b in a)
