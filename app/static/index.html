@@ -174,7 +174,7 @@ dialog label{display:flex;gap:8px;padding:6px 0}
   <div class="bar">
     <select id="flt" onchange="renderAdmin()"><option value="">全部状态</option><option value="pending">待审批</option><option value="active">进行中</option><option value="failed">失败</option><option value="done">已完成</option><option value="rejected">已拒绝</option></select>
     <select id="usr" onchange="renderAdmin()"><option value="">所有用户</option></select>
-    <input id="q" placeholder="片名搜索…" oninput="clearTimeout(window._qt);window._qt=setTimeout(renderAdmin,300)" style="width:140px">
+    
     <button class="btn" onclick="selAll()">全选/取消</button>
     <button class="btn" onclick="batch('approve')">批量通过</button><button class="btn" onclick="batch('reject')">批量拒绝</button>
     <button class="btn" onclick="batch('retry')">批量重试</button><button class="btn" onclick="batch('reset')" title="清空已试过的资源，从头重新搜索">重新搜索</button><button class="btn" onclick="batch('delete')">批量删除</button><button class="btn" onclick="appendEps()" title="连载剧已入库后，只补新更新的集数">追加集数</button>
@@ -292,8 +292,10 @@ async function tvUpdate(i){
   const parts=[];
   if(x.missing_seasons&&x.missing_seasons.length)parts.push('缺少第 '+x.missing_seasons.join('、')+' 季');
   if(x.missing_eps>0)parts.push('缺少约 '+x.missing_eps+' 集');
-  if(!confirm('确定要补齐 '+x.title+' 吗？\n'+parts.join('；')+'\n缺季将新建求片，缺集将自动追加搜索。'))return;
-  try{await api('/api/tv/'+x.id+'/update',{method:'POST',body:{title:x.title,year:x.year}});toast('已提交：缺季新建求片、缺集自动追加搜索');renderGrid()}catch(e){toast(e.message)}
+  if(!confirm('确定要补齐 '+x.title+' 吗？\n'+parts.join('；')+'\n\n【确定】= 只更新缺少的集数（库里的已有集数不动）'))return;
+  let mode='missing';
+  if(confirm('要改为「全部替换」吗？\n\n【确定】= 重新下载整季并替换库里的旧文件\n【取消】= 维持只更缺集'))mode='all';
+  try{await api('/api/tv/'+x.id+'/update',{method:'POST',body:{title:x.title,year:x.year,mode:mode}});toast(mode=='all'?'已提交：整季重新下载并替换旧文件':'已提交：只更新缺少的集数');renderGrid()}catch(e){toast(e.message)}
 }
 async function search(){
   const q=$('q').value.trim();if(!q)return;
@@ -433,10 +435,13 @@ async function manual(id){
 
 async function appendEps(){
   if(!sel.size)return toast('先勾选要追加集数的剧');
+  if(!confirm('确定要追加集数吗？\n\n【确定】= 只更新缺少的集数（库里的已有集数不动）'))return;
+  let mode='missing';
+  if(confirm('要改为「全部替换」吗？\n\n【确定】= 重新下载整季并替换库里的旧文件\n【取消】= 维持只更缺集'))mode='all';
   for(const id of sel){
-    try{await api(`/api/requests/${id}/append`,{method:'POST',body:{}})}catch(e){toast(e.message)}
+    try{await api(`/api/requests/${id}/append`,{method:'POST',body:{mode:mode}})}catch(e){toast(e.message)}
   }
-  toast('已提交追加，稍后刷新看进度');setTimeout(loadAdmin,1500)
+  toast(mode=='all'?'已提交：整季替换重跑':'已提交追加：只更缺集，稍后刷新看进度');setTimeout(loadAdmin,1500)
 }
 
 
