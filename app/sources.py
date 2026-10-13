@@ -160,8 +160,8 @@ async def _kite_search(ks, q: str, limit: int = 50) -> list[Candidate]:
 
 # 每个搜索源：(同时最多几个请求, 单个请求超时秒数)。并发太多时 PanSou / CloudSaver 会被压垮，结果全部超时，
 # 所以一个源一次只放几个请求，其余排队；整体有个期限，到点就用已经拿到的结果，不会因为个别请求卡住而一无所获。
-LIMITS = {"PanSou": (3, 30), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "磁力站": (3, 45), "电影港": (1, 60)}
-DEADLINE = {1: 60, 2: 120, 3: 200}
+LIMITS = {"PanSou": (2, 90), "CloudSaver": (2, 60), "纸鸢磁力": (2, 45), "磁力站": (3, 45), "电影港": (1, 60)}
+DEADLINE = {1: 150, 2: 240, 3: 360}
 
 
 async def _guard(sem, timeout, factory):
