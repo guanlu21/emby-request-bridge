@@ -365,8 +365,9 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
         rows = [r for r in db.list_all() if r["tmdb_id"] == tid and r["media_type"] == "tv"
                 and r["season"] == s and r["status"] in ("done", "failed")]
         if rows:
+            all_mode = (b.get("mode") == "all")  # all=全部替换（重跑整季并替换旧文件）；缺省只补缺集
             for r in rows:
-                spawn(r["id"], append=True)
+                spawn(r["id"], append=not all_mode)
                 appended.append(r["id"])
         else:
             rid = db.create("tv", tid, s, title, u["name"], status, u["uid"])
@@ -384,11 +385,22 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
 @app.post("/api/requests/{rid}/append")
 async def append(rid: int, request: Request, depth: int = 0, x_token: str = Header("")):
     """追加集数：连载剧已入库后，重新搜索并只把库中没有的新集补进同一个 Season 目录。
+    body 可带 mode: "all" = 整季替换重跑；缺省只补缺集。
     必须是 async：spawn 用 asyncio.create_task 建任务，同步端点跑在线程池里拿不到事件循环会静默失败。"""
     admin(request, x_token)
     if not db.get(rid):
         raise HTTPException(404)
-    spawn(rid, append=True, depth=depth)
+    try:
+        b = await request.json()
+    except Exception:  # noqa
+        b = {}
+    if isinstance(b, str):
+        try:
+            import json as _j; b = _j.loads(b)
+        except Exception:  # noqa
+            b = {}
+    all_mode = isinstance(b, dict) and b.get("mode") == "all"
+    spawn(rid, append=not all_mode, depth=depth)
     return {"ok": True}
 
 
