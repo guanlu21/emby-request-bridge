@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from . import db, litepan
+from . import db, litepan, emby
 from .config import cfg
 from . import classify
 import math
@@ -152,6 +152,14 @@ class Pipeline:
         if r["media_type"] == "tv" and built:
             if append is None:
                 append = await self._eps_in_library(r["id"])
+                if not append:  # 本请求没有已入库目录（新求片/失败重试）：回退查 Emby 库内实际集数
+                    try:
+                        lib = await emby.series_episode_counts(r["tmdb_id"])
+                        if lib:
+                            append = {r["season"]: set(lib.get(r["season"], []))}
+                            db.log(r["id"], f"Emby 库内第 {r['season']} 季已有 {len(append[r['season']])} 集，启用下载前预判")
+                    except Exception:  # noqa
+                        append = None
             if append:
                 keep_a = []
                 for cand in built:
@@ -159,12 +167,19 @@ class Pipeline:
                     lib_n = max((len(append[s]) for s in covers if s in append), default=0)
                     upd = title_updated_eps(cand.title)
                     rng = title_ep_range(cand.title)
-                    if (upd is not None and upd <= lib_n) or (rng is not None and rng[1] <= lib_n):
+                    if upd is None and rng is None:
+                        # 标题没写「更新至 N 集」也没写集数范围（如同名电影、S01 整包）：
+                        # 无法判断有没有新集，追集时不下载验证，直接过滤
+                        report["counts"]["追集无集数标注"] = report["counts"].get("追集无集数标注", 0) + 1
+                        report.setdefault("samples", []).append("标题无更新至/集数范围，不考虑: " + cand.title[:60])
+                    elif (upd is not None and upd <= lib_n) or (rng is not None and rng[1] <= lib_n):
                         report["counts"]["追集无新集"] = report["counts"].get("追集无新集", 0) + 1
-                        report.setdefault("samples", []).append(f"库里有 {lib_n} 集、资源无新集: " + cand.title[:60])
+                        report.setdefault("samples", []).append(f"库里有 {lib_n} 集、资源最大集数不超过已有: " + cand.title[:60])
                     else:
                         keep_a.append(cand)
                 built = keep_a
+                # 连载剧追集：优先夸克分享（转存快、不占磁力离线配额），没有合适的再试磁力
+                built.sort(key=lambda c: 0 if c.kind == "share" else 1)
         return raw, built, report, notes
 
     def _save_cands(self, rows, built, report):

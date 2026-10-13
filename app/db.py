@@ -85,10 +85,13 @@ def log(rid, msg):
 
 def list_all(user=""):
     with _lock:
+        # 管理页只保留最近 30 条记录，更早的直接清掉（避免记录越积越多导致列表渲染卡顿）
+        conn().execute("DELETE FROM requests WHERE id NOT IN (SELECT id FROM requests ORDER BY id DESC LIMIT 30)")
         if user:
-            q = conn().execute("SELECT * FROM requests WHERE requester=? COLLATE NOCASE ORDER BY id DESC LIMIT 200", (user,))
+            q = conn().execute("SELECT * FROM requests WHERE requester=? COLLATE NOCASE ORDER BY id DESC LIMIT 30", (user,))
         else:
-            q = conn().execute("SELECT * FROM requests ORDER BY id DESC LIMIT 200")
+            q = conn().execute("SELECT * FROM requests ORDER BY id DESC LIMIT 30")
+        conn().commit()
         return [dict(r) for r in q]
 
 
