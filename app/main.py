@@ -475,6 +475,26 @@ async def manual(rid: int, request: Request, x_token: str = Header("")):
     return {"ok": True}
 
 
+@app.post("/api/requests/{rid}/markdone")
+async def markdone(rid: int, request: Request, x_token: str = Header("")):
+    """搜索失败的请求手动标记成功：管理员已经自己把文件放好了，这里只改状态并走一遍入库通知
+    （LitePan 联动 / Emby 刷新），让求片用户那边能正常看到片。"""
+    admin(request, x_token)
+    r = db.get(rid)
+    if not r:
+        raise HTTPException(404)
+    if r["status"] not in ("failed", "rejected", "pending", "searching", "downloading"):
+        raise HTTPException(400, "只有未完成的请求才能手动标记成功")
+    if rid in pipe._active:
+        raise HTTPException(400, "这条请求还在处理中，等它结束再标记")
+    db.update(rid, status="done", error="")
+    db.log(rid, "管理员手动标记为已入库")
+    t = asyncio.create_task(notify_after(r))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"ok": True}
+
+
 @app.get("/api/users")
 async def users(request: Request, x_token: str = Header("")):
     """按求片人汇总，并带上该 Emby 账号当前是否停用（供管理页或 emby-manager 调用）。"""

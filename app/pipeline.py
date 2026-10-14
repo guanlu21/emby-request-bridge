@@ -222,6 +222,10 @@ class Pipeline:
             for x in rows:
                 db.update(x["id"], status="downloading")
             remaining = {x["season"]: x for x in rows}
+            if r["media_type"] == "tv" and len(remaining) > 1:
+                # 多季一起求：优先尝试覆盖季数最多的大包资源；大包成功后 remaining 清空，
+                # 其余季自动不再单独搜索下载
+                cands.sort(key=lambda c: -len(set(c.covers or []) & set(remaining)))
             for n, c in enumerate(cands[:cfg.MAX_ATTEMPTS], 1):
                 if not remaining:
                     break
