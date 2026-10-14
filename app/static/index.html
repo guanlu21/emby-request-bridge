@@ -354,7 +354,9 @@ async function loadMine(){
 
 /* ---- 管理 ---- */
 async function loadAdmin(){
-  const fresh=await api('/api/requests'),sig=JSON.stringify(fresh);
+  let fresh;
+  try{fresh=await api('/api/requests')}catch(e){return}   // 轮询出错不中断，下一轮自动重试
+  const sig=JSON.stringify(fresh);
   if(sig===LASTSIG.admin&&data.length)return;   // 没有变化：不重绘，日志保持原样
   LASTSIG.admin=sig;data=fresh;
   const u=$('usr'),cur=u.value,names=[...new Set(data.map(x=>x.requester).filter(Boolean))].sort();
@@ -371,7 +373,11 @@ function renderAdmin(){
   $('rows').innerHTML=d.map(x=>`<tr><td class="ck"><input type="checkbox" ${sel.has(x.id)?'checked':''} onchange="pick(${x.id},this.checked)" aria-label="选择"></td>
   <td class="t">${esc(x.title)}${x.season?` <small>第${x.season}季</small>`:''}<details ${OPEN.has(x.id)?'open':''} ontoggle="toggleLog(${x.id},this.open)"><summary><small>日志</small></summary><pre>${esc(logtxt(x))}</pre></details></td>
   <td data-l="求片人">${esc(x.requester)||'<small>-</small>'}</td><td data-l="时间">${times(x)}</td><td data-l="状态">${pill(x.status)}${x.error?`<br><small>${esc(x.error)}</small>`:''}</td><td data-l="资源"><small>${esc(x.picked)||'-'}</small></td>
-  <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['done','failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}</td></tr>`).join('');
+  <td class="op">${['done','failed'].includes(x.status)?`<button class="btn" onclick="showCands(${x.id})">候选/替换</button>`:''}${['done','failed','rejected'].includes(x.status)?`<button class="btn" onclick="manual(${x.id})">手动资源</button>`:''}${x.status=='failed'?`<button class="btn" onclick="markDone(${x.id})">手动成功</button>`:''}</td></tr>`).join('');
+}
+async function markDone(id){
+  if(!confirm('确认这条资源已经手动入库了吗？\n确定后状态改为「已完成」，并触发入库通知（联动/Emby 刷新）。'))return;
+  try{await api(`/api/requests/${id}/markdone`,{method:'POST',body:{}});toast('已标记成功，入库通知已触发');LASTSIG.admin='';loadAdmin()}catch(e){toast(e.message)}
 }
 
 let CD=null,CTAB='c',CSHOW=20,CID=0;
