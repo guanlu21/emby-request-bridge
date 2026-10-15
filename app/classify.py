@@ -113,6 +113,8 @@ EP_PATTERNS = [
     # 裸数字集数：12.mp4 这种文件名只有集数（上面的 EP? 模式要求先有字母 E，匹配不到）
     re.compile(r"(?i)^(\d{1,3})\.(?:mp4|mkv|avi|ts|mov|wmv|mpg|mpeg|m2ts|iso|m4v|rmvb|flv)$"),  # 12.mp4
     re.compile(r"(?i)\s(\d{1,3})(?=\.\w{1,4}$)"),  # xxx 07.mkv，空格后面的数字直接接扩展名
+    re.compile(r"(?i)^(\d{1,3})\.(?=\d{3,4}[pkx])"),  # 01.2160p.HD国语中字….mkv，开头数字+点+画质
+    re.compile(r"[\u4e00-\u9fff](\d{1,3})\.(?:mp4|mkv|avi|ts|mov|wmv|mpg|mpeg|m2ts|m4v|rmvb|flv)$"),  # 再起风云国语30.mkv，中文片名直接拼集数
 ]
 
 
