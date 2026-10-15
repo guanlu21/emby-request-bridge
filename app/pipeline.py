@@ -1,6 +1,7 @@
 """Emby求片 · 求片主流程：搜索 → 逐个候选尝试（失败自动换下一个）→ 过滤文件 → 移入正式目录 → 通知入库。"""
 import asyncio
 import json
+import re
 import time
 
 import httpx
@@ -18,6 +19,14 @@ from .sources import Candidate, build_candidates, parse_115_share, share_provide
 
 class SetupError(Exception):
     """配置/环境问题（目录无效、115 没登录等）：换资源也没用，直接终止，且不把候选记为已试。"""
+
+
+# 明显不是影视资源的标题：网页链接、压缩包、文档等，直接过滤不下载
+JUNK_RE = re.compile(
+    r"https?://|\.html?(?:$|[?\s])|【压缩】|【文档】|【专辑】|\.zip\b|\.rar\b|\.7z\b"
+    r"|\.exe\b|\.pdf\b|\.docx?\b|\.epub\b|\.azw3\b|\.txt\b|\.iso\b",
+    re.I,
+)
 
 
 def cand_dict(c: Candidate) -> dict:
@@ -204,6 +213,11 @@ class Pipeline:
             tried = set(json.loads(r["tried"]))
             self._save_cands(rows, built, report)
             cands = [c for c in built if c.url not in tried]
+            n = len(cands)
+            cands = [c for c in cands if not JUNK_RE.search(c.title or "")]
+            if n != len(cands):
+                report["counts"]["网页链接/压缩包/文档等非影视资源"] = n - len(cands)
+                self._log_all(rows, f"过滤掉 {n - len(cands)} 个明显不是影视的资源（网页链接/压缩包/文档等）")
             if report.get("counts"):
                 self._log_all(rows, "过滤掉：" + "、".join(f"{k} {v}" for k, v in report["counts"].most_common()))
                 if not cands:
@@ -663,8 +677,18 @@ class Pipeline:
                     dest = await self.dest_dir(x, meta, provider)
                 except Exception as e:  # noqa
                     raise SetupError(f"无法在 {pname} 影视目录里建文件夹（{e}）。请到「设置」里重新选择{pname}的影视根目录")
-                if replace_old and len(rows) == 1:
-                    await self.remove_placed(xid, replace_old, dest, provider)
+                if not append_eps:
+                    # 替换/重跑：删掉这一季自己的旧文件（多季一起替换时各删各的，不能只删单季场景）
+                    old_placed = replace_old
+                    if old_placed is None:
+                        try:
+                            own = json.loads(x["placed"] or "null")
+                        except (ValueError, TypeError):
+                            own = None
+                        if own and own.get("files"):
+                            old_placed = own
+                    if old_placed and old_placed.get("files"):
+                        await self.remove_placed(xid, old_placed, dest, provider)
                 await self.rename_files(xid, fl, x, meta, c.title, drive, sub_map=sub_map)
                 ids = [f["id"] for f in fl]
                 nsub = 0
