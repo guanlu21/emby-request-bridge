@@ -479,7 +479,7 @@ let SET=null,FOLDER={},FSTACK=[],FLIST=[],FKEY='',QPOLL=false,ACTIVE='';
 const CATS=[['连接',['Emby','115 网盘','夸克网盘','资源搜索','代理与 TMDB']],['入库',['入库分类','命名格式','LitePan 联动']],['规则',['选源规则','关键词筛选','审批与限额']]];
 const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','夸克网盘':'夸克的 Cookie 和两个目录。夸克只能转存分享链接（没有磁力离线下载）；不设就不会使用夸克。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115/夸克分享链接）、电影港（磁力+分享）、磁力站（磁力帝、BitSearch…）和纸鸢磁力（磁力）。',
   '代理与 TMDB':'TMDB 搜索和海报用的代理与接口地址。','入库分类':'下载完成后按 TMDB 信息自动放进哪些目录。','命名格式':'文件夹和文件的命名模板，默认带 TMDB 编号。',
-  'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。'};
+  'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。','备份与恢复':'备份请求记录、网页设置和自定义搜索规则；恢复会覆盖当前这些数据。'};
 const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
     <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
     <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
@@ -518,6 +518,8 @@ async function loadSet(){
   rest.forEach(g=>add(g.group,g.fields.map(f=>fieldHtml(f,d)).join('')+(ACTS[g.group]||'')));
   nav+=`<div class="cat">安全</div>`;
   add('API 令牌',`<div class="row"><span>令牌</span><div><div class="acts"><button class="btn" onclick="showTok()">显示令牌</button><button class="btn" onclick="resetTok()">重新生成</button></div><small><code id="tokv"></code></small></div></div>`);
+  nav+=`<div class="cat">维护</div>`;
+  add('备份与恢复',`<div class="row"><span>下载备份</span><div><button class="btn" onclick="downloadBackup()">下载 ZIP 备份</button><small>包含请求记录、应用设置和可选的自定义 rules.json。</small></div></div><div class="row"><span>恢复备份</span><div><button class="btn" onclick="$('backupFile').click()">选择 ZIP 并恢复</button><input id="backupFile" class="hide" type="file" accept=".zip,application/zip" onchange="restoreBackup(this)"><small>恢复会覆盖当前请求记录、设置和自定义规则；恢复前建议先下载当前备份。恢复时不能有正在运行的求片任务。</small></div></div><p><small>备份文件包含网盘 Cookie、API 密钥等敏感信息，请妥善保管，不要公开分享。</small></p>`);
   $('setnav').innerHTML=nav;$('setpanels').innerHTML=panels;
   let first='';try{first=sessionStorage.getItem('setg')||''}catch(e){}
   showGroup(ACTIVE&&document.querySelector(`.panel[data-g="${CSS.escape(ACTIVE)}"]`)?ACTIVE:(first&&document.querySelector(`.panel[data-g="${CSS.escape(first)}"]`)?first:Object.keys(by)[0]));
@@ -543,6 +545,24 @@ function collect(){
 async function saveSet(silent){
   try{await api('/api/settings',{method:'PUT',body:collect()});if(!silent){toast('设置已保存');loadSet()}return true}
   catch(e){toast(e.message);return false}
+}
+async function downloadBackup(){
+  try{
+    const r=await fetch('/api/backup');
+    if(!r.ok){const d=await r.json().catch(()=>({}));if(r.status==401)showLogin();throw new Error(d.detail||('备份下载失败 '+r.status))}
+    const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download=(r.headers.get('Content-Disposition')||'').match(/filename="?([^";]+)"?/i)?.[1]||'emby-request-bridge-backup.zip';
+    document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);toast('备份下载已开始');
+  }catch(e){toast(e.message)}
+}
+async function restoreBackup(input){
+  const file=input.files?.[0];if(!file)return;
+  if(!confirm(`确定用「${file.name}」恢复吗？这会覆盖当前请求记录、设置和自定义规则，且不能自动撤销。`)){input.value='';return}
+  try{
+    const r=await fetch('/api/backup/restore',{method:'POST',headers:{'Content-Type':'application/zip'},body:file});
+    const d=await r.json().catch(()=>({}));if(r.status==401)showLogin();if(!r.ok)throw new Error(d.detail||('恢复失败 '+r.status));
+    toast('恢复成功，正在重新加载页面');setTimeout(()=>location.reload(),900);
+  }catch(e){toast(e.message)}finally{input.value=''}
 }
 async function runTest(path,fmt,wait){
   if(!await saveSet(true))return;

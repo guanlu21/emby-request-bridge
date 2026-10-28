@@ -148,6 +148,13 @@ def get() -> dict:
     return _cache
 
 
+def reload() -> dict:
+    """Discard cached settings and reload them from settings.json."""
+    global _cache
+    _cache = None
+    return get()
+
+
 def _num(v):
     f = float(v)
     return int(f) if f == int(f) else f

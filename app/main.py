@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth as auth_mod, cloudsaver, db, drive115, dyg, emby, kite, litepan, quark, rules, settings, tmdb
+from . import auth as auth_mod, backup, cloudsaver, db, drive115, dyg, emby, kite, litepan, quark, rules, settings, tmdb
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
@@ -532,6 +532,40 @@ async def put_settings(request: Request, x_token: str = Header("")):
     admin(request, x_token)
     settings.save(await request.json())
     return settings.public()
+
+
+@app.get("/api/backup")
+def download_backup(request: Request, x_token: str = Header("")):
+    """Download a ZIP containing request history, settings, and custom rules."""
+    admin(request, x_token)
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    return Response(
+        content=backup.create_backup(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="emby-request-bridge-backup-{stamp}.zip"',
+                 "Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/backup/restore")
+async def restore_backup(request: Request, x_token: str = Header("")):
+    """Replace persistent app data from a previously downloaded backup ZIP."""
+    admin(request, x_token)
+    if any(not task.done() for task in _tasks):
+        raise HTTPException(409, "当前有求片任务正在运行，请等任务结束后再恢复")
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > backup.MAX_ARCHIVE_BYTES:
+        raise HTTPException(413, "备份文件超过 256 MB 限制")
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > backup.MAX_ARCHIVE_BYTES:
+            raise HTTPException(413, "备份文件超过 256 MB 限制")
+        chunks.append(chunk)
+    try:
+        return backup.restore_backup(b"".join(chunks))
+    except backup.BackupError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/settings/test")
