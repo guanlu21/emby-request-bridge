@@ -577,6 +577,17 @@ async def test_settings(request: Request, x_token: str = Header("")):
     return await tmdb.test()
 
 
+@app.post("/api/settings/emby/test")
+async def test_emby(request: Request, x_token: str = Header("")):
+    """测试 Emby：密钥是否可用、库里片子数量，并按关键词列出 Emby 里搜到的条目（排查「已入库没识别」）。"""
+    admin(request, x_token)
+    try:
+        b = await request.json()
+    except Exception:  # noqa
+        b = {}
+    return await emby.diagnose((b or {}).get("q", ""))
+
+
 @app.post("/api/settings/kite/test")
 async def test_kite(request: Request, x_token: str = Header("")):
     admin(request, x_token)

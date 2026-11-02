@@ -150,3 +150,32 @@ async def series_seasons(tmdb_id: int, title: str = "", year: str = "", orig: st
         return sorted(set(seasons))
     except Exception:  # noqa
         return []
+
+
+async def diagnose(term: str = "") -> dict:
+    """设置页「测试 Emby」用：看地址/密钥是否可用、库里有多少片、用关键词能搜到什么（含它们的 TMDB ID）。"""
+    out = {"url": cfg.EMBY_URL or "", "has_key": bool(cfg.EMBY_KEY), "ok": False}
+    if not (cfg.EMBY_URL and cfg.EMBY_KEY):
+        out["error"] = "没有配置 Emby 地址或 API 密钥（首次登录自动生成失败时，需到 Emby 控制台 → 高级 → API 密钥手动创建，再填到设置里）"
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{cfg.EMBY_URL}/emby/System/Info", params={"api_key": cfg.EMBY_KEY})
+            if r.status_code != 200:
+                out["error"] = f"Emby 返回 {r.status_code}（密钥无效或地址不对）"
+                return out
+            out["server"] = r.json().get("ServerName", "") + " " + str(r.json().get("Version", ""))
+            for typ, k in (("Movie", "movies"), ("Series", "series")):
+                r = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                    "api_key": cfg.EMBY_KEY, "Recursive": "true", "IncludeItemTypes": typ, "Limit": 1})
+                out[k] = r.json().get("TotalRecordCount", 0)
+            if term.strip():
+                r = await c.get(f"{cfg.EMBY_URL}/emby/Items", params={
+                    "api_key": cfg.EMBY_KEY, "Recursive": "true", "IncludeItemTypes": "Movie,Series", "Limit": 20,
+                    "SearchTerm": term.strip(), "Fields": "ProviderIds,ProductionYear,OriginalTitle"})
+                out["found"] = [{"name": i.get("Name"), "type": i.get("Type"), "year": i.get("ProductionYear"),
+                                 "tmdb": (i.get("ProviderIds") or {}).get("Tmdb", "")} for i in r.json().get("Items", [])]
+        out["ok"] = True
+    except Exception as e:  # noqa
+        out["error"] = f"连接 Emby 出错：{e}"
+    return out

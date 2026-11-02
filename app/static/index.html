@@ -365,8 +365,8 @@ async function loadAdmin(){
   renderAdmin();
 }
 function shown(){
-  const f=$('flt').value,u=$('usr').value,q=($('q')&&$('q').value||'').trim().toLowerCase();
-  return data.filter(x=>(!u||x.requester==u)&&(!f||(f=='active'?BUSY.includes(x.status):x.status==f))&&(!q||(x.title||'').toLowerCase().includes(q)));
+  const f=$('flt').value,u=$('usr').value;
+  return data.filter(x=>(!u||x.requester==u)&&(!f||(f=='active'?BUSY.includes(x.status):x.status==f)));
 }
 function renderAdmin(){
   const d=shown();$('cnt').textContent=`共 ${d.length} 条，已选 ${sel.size} 条`;
@@ -481,7 +481,8 @@ const CATS=[['连接',['Emby','115 网盘','夸克网盘','资源搜索','代理
 const GDESC={'Emby':'Emby 服务器地址、API 密钥和管理员名单。','115 网盘':'115 的登录方式和三个目录。只填 Cookie 就能用；有 AppID 可扫码授权。','夸克网盘':'夸克的 Cookie 和两个目录。夸克只能转存分享链接（没有磁力离线下载）；不设就不会使用夸克。','资源搜索':'去哪里找资源：PanSou、CloudSaver（115/夸克分享链接）、电影港（磁力+分享）、磁力站（磁力帝、BitSearch…）和纸鸢磁力（磁力）。',
   '代理与 TMDB':'TMDB 搜索和海报用的代理与接口地址。','入库分类':'下载完成后按 TMDB 信息自动放进哪些目录。','命名格式':'文件夹和文件的命名模板，默认带 TMDB 编号。',
   'LitePan 联动':'入库后通知 LitePan 执行联动（刷新目录、STRM、Emby 扫库），按分类只处理对应目录。','选源规则':'分辨率、体积、尝试次数、离线等待上限。','关键词筛选':'按标题里的关键词（国语、中字…）筛选资源。','审批与限额':'新请求怎么处理，每人每周最多求几部。','API 令牌':'脚本或 emby-manager 调用管理接口用。','备份与恢复':'备份请求记录、网页设置和自定义搜索规则；恢复会覆盖当前这些数据。'};
-const ACTS={'115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
+const ACTS={'Emby':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testEmby()">测试 Emby（入库查询）</button></div><small>会让你输入一个片名（如「功夫」），列出 Emby 里实际搜到的条目，用来排查「已入库却显示求片」。</small>`,
+  '115 网盘':`<div class="row"><span>115 状态</span><div><span id="p115st">检查中…</span>
     <div class="acts" style="margin-top:8px"><button class="btn" onclick="p115Test()">测试 115 连接</button><button class="btn" onclick="p115Auth()">扫码授权（需 AppID）</button><button class="btn" onclick="p115Out()">取消授权</button></div>
     <small>选目录、测试、授权前会自动保存当前设置。</small></div></div>`,
   '夸克网盘':`<div class="acts" style="margin-top:14px"><button class="btn" onclick="testQuark()">测试夸克连接</button></div>`,
@@ -569,6 +570,19 @@ async function runTest(path,fmt,wait){
   if(!await saveSet(true))return;
   out(wait||'测试中…');
   try{out(fmt(await api(path,{method:'POST'})))}catch(e){out(e.message)}
+}
+async function testEmby(){
+  const q=prompt('输入一个库里已有的片名来测试：','功夫');if(q===null)return;
+  if(!await saveSet(true))return;
+  out('测试中…');
+  try{
+    const r=await api('/api/settings/emby/test',{method:'POST',body:{q:q}});
+    if(!r.ok){out('失败：'+(r.error||'未知错误'));return}
+    const L=['Emby 连接正常：'+(r.server||''),`库里共 ${r.movies} 部电影、${r.series} 部剧集`,`Emby 里搜「${q}」得到 ${(r.found||[]).length} 条：`];
+    (r.found||[]).forEach(x=>L.push(`  · ${x.name}（${x.year||'?'}，${x.type=='Movie'?'电影':'剧集'}）TMDB ID：${x.tmdb||'无'}`));
+    if(!(r.found||[]).length)L.push('  （一条都没搜到：说明密钥所属权限/媒体库有问题，或片名和 Emby 里的不一致）');
+    out(L.join('\n'))
+  }catch(e){out(e.message)}
 }
 const testQuark=()=>runTest('/api/quark/test',r=>r.ok?`夸克连接正常，根目录下有 ${r.root_dirs} 个文件夹`:'失败：'+r.error);
 const testDyg=()=>runTest('/api/settings/dyg/test',r=>{
