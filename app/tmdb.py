@@ -38,7 +38,8 @@ def _item(it, typ):
     return {"id": it["id"], "type": typ, "title": it.get("title") or it.get("name") or "",
             "year": _year(it), "overview": (it.get("overview") or "")[:140],
             "poster": it.get("poster_path") or "", "rating": round(it.get("vote_average") or 0, 1),
-            "pop": it.get("popularity") or 0}
+            "pop": it.get("popularity") or 0,
+            "orig": it.get("original_title") or it.get("original_name") or ""}
 
 
 async def search(q: str) -> list[dict]:

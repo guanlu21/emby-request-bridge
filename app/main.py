@@ -15,6 +15,7 @@ from . import auth as auth_mod, backup, cloudsaver, db, drive115, dyg, emby, kit
 from .config import cfg
 from .pipeline import Pipeline, notify_after
 from .sources import search_all, tmdb_meta
+from .version import VERSION
 
 _tasks: set = set()
 _fails: dict = {}  # 登录失败限流：(ip,用户名) -> [时间戳]
@@ -49,7 +50,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(lifespan=lifespan, title="Emby求片")
+app = FastAPI(lifespan=lifespan, title="Emby求片", version=VERSION)
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 
@@ -101,7 +102,7 @@ def admin(request: Request, x_token: str = "") -> dict:
 @app.get("/api/status")
 def status():
     """登录页用：Emby 地址是否已配置、是否已有管理员。"""
-    return {"configured": bool(cfg.EMBY_URL), "initialized": bool(settings.admins())}
+    return {"configured": bool(cfg.EMBY_URL), "initialized": bool(settings.admins()), "version": VERSION}
 
 
 @app.post("/api/login")
@@ -148,7 +149,7 @@ def logout(response: Response):
 @app.get("/api/me")
 def me(request: Request, x_token: str = Header("")):
     u = who(request, x_token)
-    return {"name": u["name"], "admin": u["admin"]}
+    return {"name": u["name"], "admin": u["admin"], "version": VERSION}
 
 
 # ---------- 搜索与求片 ----------
@@ -160,9 +161,10 @@ async def annotate(items: list[dict], limit: int = 80):
         if it["type"] == "person":
             return
         async with sem:
-            it["in_library"] = await emby.has_item(it["type"], it["id"])
+            nm = dict(title=it.get("title", ""), year=it.get("year", ""), orig=it.get("orig", ""))
+            it["in_library"] = await emby.has_item(it["type"], it["id"], **nm)
             if it["type"] == "tv" and it["in_library"]:
-                have = set(await emby.series_seasons(it["id"]))
+                have = set(await emby.series_seasons(it["id"], **nm))
                 try:
                     info = await tmdb.tv_seasons(it["id"])
                     total = {x["season"] for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
@@ -172,7 +174,7 @@ async def annotate(items: list[dict], limit: int = 80):
                 # 库里查不到季列表（total 或 have 为空）时按"有缺"处理，保留补季入口
                 it["lib_seasons"] = sorted(have)
                 # 求更：库内已有的季，逐季对比 TMDB 总集数，缺的集数求更新
-                lib_eps = await emby.series_episode_counts(it["id"])
+                lib_eps = await emby.series_episode_counts(it["id"], **nm)
                 miss = 0
                 for s in have:
                     tmdb_n = next((x.get("episodes", 0) for x in info.get("seasons", []) if x.get("season") == s), 0) if total else 0
@@ -336,8 +338,9 @@ async def tv_update(tid: int, request: Request, x_token: str = Header("")):
         info = {}
         import logging; logging.getLogger("uvicorn.error").warning(f"tv_update tmdb 失败 tid={tid}: {ex}")
     seasons = {x["season"]: x.get("episodes", 0) for x in info.get("seasons", []) if x.get("episodes", 0) > 0}
-    have = set(await emby.series_seasons(tid))
-    lib_eps = await emby.series_episode_counts(tid)
+    nm = dict(title=b.get("title", ""), year=str(b.get("year") or ""))
+    have = set(await emby.series_seasons(tid, **nm))
+    lib_eps = await emby.series_episode_counts(tid, **nm)
     created, appended, dup = [], [], 0
     # 1) 缺季：新建求片（走原有审批/去重逻辑）
     miss_seasons = sorted(set(seasons) - have)

@@ -15,6 +15,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 "PingFang SC",
 header{display:flex;align-items:center;gap:16px;padding:0 20px;height:var(--hh);background:var(--sf);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10}
 header b{font-size:17px}
 .brand{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.ver{font-size:11px;color:#8b93a7;font-weight:400;margin-left:2px}
 .brand img,.biglogo{background:#fff;border-radius:8px;padding:3px}
 .biglogo{border-radius:16px;padding:6px;justify-self:start}nav{display:flex;gap:4px;flex:1}
 nav button{border:0;background:none;color:var(--mut);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
@@ -146,11 +147,11 @@ dialog label{display:flex;gap:8px;padding:6px 0}
 }
 </style></head><body>
 
-<header id="hd" class="hide"><b class="brand"><img src="/static/logo-48.png" alt="" width="28" height="28">Emby求片</b>
+<header id="hd" class="hide"><b class="brand"><img src="/static/logo-48.png" alt="" width="28" height="28">Emby求片<span class="ver" id="ver"></span></b>
   <nav id="nav"></nav><small id="who"></small><button class="btn" onclick="logout()">退出</button></header>
 <main>
 <section id="v-login" class="login hide">
-  <img class="biglogo" src="/static/icon-192.png" alt="" width="72" height="72"><h2>Emby求片</h2><small>使用你的 Emby 用户名和密码登录</small>
+  <img class="biglogo" src="/static/icon-192.png" alt="" width="72" height="72"><h2>Emby求片</h2><small>使用你的 Emby 用户名和密码登录</small><small class="ver" id="lver"></small>
   <div id="lsetup" class="hide" style="display:grid;gap:8px"><input id="eurl" type="text" placeholder="Emby 地址，如 http://192.168.1.10:8096" autocapitalize="off">
     <small>首次使用：请用 Emby 管理员账号登录，它会成为本站管理员。</small></div>
   <input id="u" type="text" placeholder="用户名" autocomplete="username" autocapitalize="off">
@@ -249,12 +250,12 @@ function view(v){
 }
 async function showLogin(){
   me=null;$('hd').classList.add('hide');view('login');
-  try{const s=await (await fetch('/api/status')).json();$('lsetup').classList.toggle('hide',s.configured)}catch(e){}
+  try{const s=await (await fetch('/api/status')).json();$('lsetup').classList.toggle('hide',s.configured);$('lver').textContent=s.version||''}catch(e){}
 }
 
 async function start(){
   try{me=await api('/api/me')}catch(e){return showLogin()}
-  $('hd').classList.remove('hide');$('who').textContent=me.name+(me.admin?'（管理员）':'');
+  $('hd').classList.remove('hide');$('who').textContent=me.name+(me.admin?'（管理员）':'');$('ver').textContent=me.version||'';
   const tabs=[['search','搜索求片'],['mine','我的请求']].concat(me.admin?[['admin','管理'],['set','设置']]:[]);
   $('nav').innerHTML=tabs.map(([v,n])=>`<button data-v="${v}" onclick="view('${v}')">${n}</button>`).join('');
   view('search');
